@@ -1,0 +1,25 @@
+name: 자체 검사
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # 리뷰 테스트가 임시 git 저장소에 커밋한다.
+      - run: git config --global user.email ci@example.com && git config --global user.name ci
+      - run: |
+          set -e
+          for test in tests/test_*.py; do
+            echo "::group::$test"; python -I "$test"; echo "::endgroup::"
+          done
