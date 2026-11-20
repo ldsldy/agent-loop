@@ -48,6 +48,6 @@ ShalomEng 저장소의 루프(마일스톤 → 루프 브랜치 → 조각 PR �
 
 ## 열린 위험
 
-- `CLAUDE_ENV_FILE`로 내보낸 `AGENT_LOOP_HOME`이 Desktop 앱의 Bash와 백그라운드 명령에 실제로 보이는지 1단계에서 확인한다.
-  안 보이면 스크립트가 `~/.claude/plugins/installed_plugins.json`에서 플러그인 경로를 찾는다.
+- `CLAUDE_ENV_FILE`로 내보낸 `AGENT_LOOP_HOME`은 `claude -p --plugin-dir`로 띄운 세션의 Bash에서 보이는 것을 확인했다(2026-11-20).
+  Desktop 앱 세션에서는 아직 확인하지 않았다.
 - 로컬 경로 마켓플레이스는 이 PC에서만 동작한다. 4단계 전에는 다른 PC에서 ShalomEng 루프를 돌릴 수 없다.
