@@ -50,6 +50,24 @@ class InitTests(unittest.TestCase):
             self.assertEqual(dict(init.plan(root, update=False))[".github/scripts/auto_merge_guard.py"], "same")
 
 
+    def test_check_fails_on_a_stale_plugin_file_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "init", "-q", root], check=True)
+            init.apply(root, init.plan(root, update=False))
+
+            def check():
+                return subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "init.py"), "--check"], cwd=root,
+                                      capture_output=True, text=True, encoding="utf-8")
+
+            self.assertEqual(check().returncode, 0)
+            guard = os.path.join(root, ".github", "scripts", "auto_merge_guard.py")
+            write(guard, "# old")
+            done = check()
+            self.assertEqual(done.returncode, 1)
+            self.assertIn(".github/scripts/auto_merge_guard.py: 플러그인 것과 다름", done.stdout)
+            self.assertEqual(open(guard, encoding="utf-8").read(), "# old")
+
+
 class SeedTests(unittest.TestCase):
     def test_seed_config_loads_through_every_plugin_module(self):
         """씨앗만 넣은 저장소에서 플러그인 스크립트가 모두 설정을 읽는다(빠진 키·배점 오류가 없다)."""

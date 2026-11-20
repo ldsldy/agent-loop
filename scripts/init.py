@@ -2,6 +2,7 @@
 
     python -I init.py            # 없는 파일만 넣고, 플러그인 관리 파일이 옛것이면 알린다
     python -I init.py --update   # 플러그인 관리 파일을 플러그인 것으로 덮어쓴다
+    python -I init.py --check    # 쓰지 않고, 빠지거나 다른 파일이 있으면 exit 1(저장소 CI가 복사본을 검사한다)
 
 - 플러그인 관리 파일(가드 워크플로·스크립트, 리뷰 범위 판정): 플러그인이 정본이다. 저장소 기준 브랜치에서 돌아야 해서 복사본을 둔다.
 - 저장소 소유 파일(.agent-loop/ 설정, 자동 머지 정책): 처음 한 번 씨앗을 넣고 그 뒤로는 덮어쓰지 않는다.
@@ -65,6 +66,12 @@ def main(argv):
         sys.exit("git 저장소 안에서 실행하세요.")
     root = os.path.normpath(done.stdout.strip())
     actions = plan(root, "--update" in argv)
+    if "--check" in argv:
+        # CI용: 아무것도 쓰지 않고, 빠지거나 플러그인 것과 다른 파일이 있으면 실패한다.
+        bad = [(dst, action) for dst, action in actions if action in ("copy", "stale")]
+        for dst, action in bad:
+            print(f"{dst}: {'없음' if action == 'copy' else '플러그인 것과 다름'}")
+        return 1 if bad else 0
     apply(root, actions)
     for dst, action in actions:
         print(f"{dst}: {LABELS[action]}")

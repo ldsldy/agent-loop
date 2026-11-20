@@ -1,5 +1,6 @@
 """극저위험 자동 머지 가드. 정책은 기준 브랜치의 .github/auto-merge-policy.json만 쓴다(PR 작성자가 못 바꾼다).
-허용 목록에 없는 변경, 금지 경로, 기존 테스트 수정·삭제, 분석 불가는 모두 차단이다."""
+허용 목록에 없는 변경, 금지 경로, 기존 테스트 수정·삭제, 분석 불가는 모두 차단이다.
+agent-loop 플러그인이 관리하는 파일이다(loop-init이 복사, 저장소 CI가 init.py --check로 같은지 검사). 테스트는 플러그인 tests/test_auto_merge_guard.py."""
 import json, os, re, subprocess, sys
 
 MARKER = "<!-- auto-merge-guard -->"

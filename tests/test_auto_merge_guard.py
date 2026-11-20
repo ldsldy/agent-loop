@@ -1,11 +1,15 @@
-"""자동 머지 가드 판정 자체 검사: python -I tests/test_auto_merge_guard.py (정책은 ShalomEng 고정물)"""
+"""자동 머지 가드 판정 자체 검사: python -I tests/test_auto_merge_guard.py
+
+정책은 ShalomEng 고정물이다. ShalomEng CI는 AGENT_LOOP_POLICY=.github/auto-merge-policy.json으로 실제 정책에 대고 돌린다.
+"""
 import json, os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "templates", "github", "scripts"))
 from auto_merge_guard import evaluate  # noqa: E402
 
-POLICY = json.load(open(os.path.join(HERE, "fixture", ".github", "auto-merge-policy.json"), encoding="utf-8"))
+POLICY_PATH = os.environ.get("AGENT_LOOP_POLICY") or os.path.join(HERE, "fixture", ".github", "auto-merge-policy.json")
+POLICY = json.load(open(POLICY_PATH, encoding="utf-8"))
 T = "Assets/FaultTrain/UI/Tests/EditMode/FooTests.cs"
 S = "Assets/FaultTrain/Scripts/Hotspots/HotspotProjection.cs"
 
