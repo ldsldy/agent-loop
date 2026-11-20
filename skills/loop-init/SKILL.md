@@ -51,7 +51,7 @@ python -I "${CLAUDE_PLUGIN_ROOT}/scripts/init.py" --update   # 플러그인 관�
 - 라벨: `ready-for-agent`, `human`, `spec`, `low-risk`(정책의 `label`).
 - `loop/**` 규칙 세트: 필수 검사에 정책의 `required_checks`(씨앗은 `auto-merge-guard`). 루프 브랜치 생성까지 막으면 `loop_branch_ruleset`에 적는다.
 - 저장소 CI에 `python -I <플러그인>/scripts/init.py --check`를 넣어 플러그인 관리 파일이 플러그인 것과 같은지 검사한다. 플러그인은 커밋 SHA로 고정해 받고(`actions/checkout`의 `ref`), 비밀 토큰으로 받으면 `persist-credentials: false`를 둔다(뒤에 PR 코드가 돈다).
-- 테스트 CI는 `base_branch`·`main`으로 가는 PR에서만 돌고, `.github/scripts/review_scope.py`가 true인 PR만 테스트한다. 결과는 `ci.results_artifact` 이름의 아티팩트로 올린다. 조각 PR(`loop/**` 대상)에서는 돌지 않게 한다.
+- 테스트 CI는 `base_branch`·`main`으로 가는 PR에서만 돌고, `.github/scripts/review_scope.py`가 true인 PR만 테스트한다. 결과는 `ci.results_artifact` 이름의 아티팩트로 올린다. 판정 잡은 PR 쪽이 아니라 기준 브랜치 커밋의 `review_scope.py`·`config.json`을 읽고, 두 파일과 테스트 워크플로를 `review_paths`에 넣는다(PR이 판정을 바꿔 테스트를 건너뛰지 못하게). 조각 PR(`loop/**` 대상)에서는 돌지 않게 한다.
 
 ## 4. 에이전트 규칙
 

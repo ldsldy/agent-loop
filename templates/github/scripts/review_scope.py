@@ -1,7 +1,8 @@
 """변경이 리뷰 대상 경로(.agent-loop/config.json의 review_paths)를 건드리는지 판정한다.
 
-agent-loop 플러그인이 관리하는 파일이다(loop-init이 복사, 저장소 CI가 init.py --check로 같은지 검사). 플러그인 scope.py와 저장소 CI가 이 판정을 같이 쓴다.
-CI의 변경 판정 잡은 플러그인 없이 이 복사본과 .agent-loop/config.json만 받아 돌린다.
+판정 코드의 정본은 플러그인 templates/github/scripts/의 이 파일이다. 플러그인 scope.py는 정본을 가져다 쓰고,
+저장소 .github/scripts/의 것은 loop-init이 넣은 복사본이다(저장소 CI가 init.py --check로 정본과 같은지 검사한다).
+저장소 CI의 변경 판정 잡은 플러그인 없이 기준 브랜치의 복사본과 .agent-loop/config.json만 받아 돌린다(PR이 판정을 바꾸지 못하게).
     git diff --name-only --no-renames <base>...<head> | python3 .github/scripts/review_scope.py   # true / false
 """
 import json
