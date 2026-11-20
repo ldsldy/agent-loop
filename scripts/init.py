@@ -6,7 +6,6 @@
 - 플러그인 관리 파일(가드 워크플로·스크립트, 리뷰 범위 판정): 플러그인이 정본이다. 저장소 기준 브랜치에서 돌아야 해서 복사본을 둔다.
 - 저장소 소유 파일(.agent-loop/ 설정, 자동 머지 정책): 처음 한 번 씨앗을 넣고 그 뒤로는 덮어쓰지 않는다.
 """
-import filecmp
 import os
 import shutil
 import subprocess
@@ -26,6 +25,12 @@ FILES = [
 ]
 
 
+def same_text(a, b):
+    """줄 끝만 다른 파일은 같다. Windows 체크아웃(core.autocrlf)은 저장소 복사본을 CRLF로 바꿔 둔다."""
+    with open(a, "rb") as first, open(b, "rb") as second:
+        return first.read().replace(b"\r\n", b"\n") == second.read().replace(b"\r\n", b"\n")
+
+
 def plan(root, update):
     """파일마다 (저장소 경로, 할 일): copy · same · keep(저장소 소유라 그대로) · stale(플러그인 것과 다름) · overwrite."""
     actions = []
@@ -35,7 +40,7 @@ def plan(root, update):
             actions.append((dst, "copy"))
         elif owner == REPO:
             actions.append((dst, "keep"))
-        elif filecmp.cmp(source, target, shallow=False):
+        elif same_text(source, target):
             actions.append((dst, "same"))
         else:
             actions.append((dst, "overwrite" if update else "stale"))

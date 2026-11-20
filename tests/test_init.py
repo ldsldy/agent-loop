@@ -39,6 +39,16 @@ class InitTests(unittest.TestCase):
             self.assertEqual(open(config, encoding="utf-8").read(), '{"mine": true}')
             self.assertNotEqual(open(guard, encoding="utf-8").read(), "# old")
 
+    def test_crlf_checkout_of_a_plugin_file_counts_as_the_same(self):
+        with tempfile.TemporaryDirectory() as root:
+            init.apply(root, init.plan(root, update=False))
+            guard = os.path.join(root, ".github", "scripts", "auto_merge_guard.py")
+            with open(guard, "rb") as file:
+                data = file.read()
+            with open(guard, "wb") as file:
+                file.write(data.replace(b"\n", b"\r\n"))
+            self.assertEqual(dict(init.plan(root, update=False))[".github/scripts/auto_merge_guard.py"], "same")
+
 
 class SeedTests(unittest.TestCase):
     def test_seed_config_loads_through_every_plugin_module(self):
