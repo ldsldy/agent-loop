@@ -1,0 +1,19 @@
+{
+  "label": "low-risk",
+  "required_checks": ["editmode", "auto-merge-guard"],
+  "deny": [
+    "CLAUDE.md", ".claude/**", ".github/**",
+    "Packages/**", "ProjectSettings/**",
+    "**/*.uxml", "**/*.uss", "**/*.unity", "**/*.prefab", "**/*.asset", "**/*.asmdef", "**/*.json",
+    "Assets/FaultTrain/Scenes/**", "Assets/FaultTrain/Prefabs/**", "Assets/FaultTrain/Data/**", "Assets/FaultTrain/Art/**",
+    "Assets/FaultTrain/Scripts/Network/**", "Assets/FaultTrain/Scripts/Core/**", "Assets/FaultTrain/Scripts/App/**", "Assets/FaultTrain/Scripts/Parts/PartStateManager*"
+  ],
+  "allow": [
+    {"glob": "**/*.md", "status": ["added", "modified"]},
+    {"glob": "docs/**", "status": ["added", "modified"]},
+    {"glob": "Assets/FaultTrain/UI/Tests/**/*.cs", "status": ["added"]},
+    {"glob": "Assets/FaultTrain/Scripts/**/*.cs", "status": ["added", "modified"]}
+  ],
+  "test_glob": "Assets/FaultTrain/UI/Tests/**",
+  "test_disable_markers": ["[Ignore", "Assert.Ignore", "[Explicit"]
+}

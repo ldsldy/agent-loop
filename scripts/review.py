@@ -180,9 +180,14 @@ def evidence_part(base, sha):
     return parts, hard_fails
 
 
+SCORING = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "references", "scoring.md")
+
+
 def rule_files(sha):
-    """규칙 문서 전문. 프로젝트 전체 리뷰(project_review.py)도 쓴다."""
-    return [f"### {path} (커밋 {sha[:7]})\n{git('show', f'{sha}:{path}')}" for path in CONTEXT_FILES]
+    """플러그인 채점 규칙과 저장소 규칙 문서(config.context_files, 대상 커밋 그대로) 전문. 프로젝트 전용 리뷰 도구도 쓴다."""
+    with open(SCORING, encoding="utf-8") as file:
+        scoring = f"### 채점 규칙 (agent-loop references/scoring.md)\n{file.read()}"
+    return [scoring] + [f"### {path} (커밋 {sha[:7]})\n{git('show', f'{sha}:{path}')}" for path in CONTEXT_FILES]
 
 
 # 상세 리뷰 diff에서 본문 대신 통계만 싣는 파일(데이터·에셋·도구·문서와 테스트). 큰 데이터 파일은 자료 한도를 넘긴다.
@@ -226,21 +231,22 @@ def context(base, sha, evidence, pr_text, with_diff, specs=()):
 
 # 최소 리뷰 프롬프트의 "CI 결과" 자리. 조각 PR은 CI를 돌리지 않는다(2026-11-19 사용자 결정).
 MINIMAL_EVIDENCE = ("조각 PR은 CI를 돌리지 않는다. 대신 구현 세션이 이 조각이 만들거나 고친 테스트만 로컬로 돌려 PR 본문에 명령과 결과를 적는다. "
-                    "테스트를 만들거나 고쳤는데 그 기록이 없거나 실패가 있으면 m2를 fail로 둔다. 나머지는 코드·spec·범위로 판단한다. "
+                    "테스트를 만들거나 고쳤는데 그 기록이 없거나 실패가 있으면 테스트 보존 항목을 fail로 둔다. 나머지는 코드·spec·범위로 판단한다. "
                     "전체 테스트 근거는 루프 끝 기준 브랜치 PR의 CI가 본다.")
 
 
 def prompt(level, sha, evidence, material, base):
     if level == "minimal":
         task = (f"조각 PR 하나의 최소 리뷰다. 먼저 Skill 도구로 `{qg.MINIMAL_SKILL}`을 고정점 `{base}`로 실행한다. "
-                "Spec 출처는 리뷰 자료의 PR 본문(수용 기준)과 그 본문이 가리키는 이슈다. Standards 출처는 CLAUDE.md다. "
+                "Spec 출처는 리뷰 자료의 PR 본문(수용 기준)과 그 본문이 가리키는 이슈다. "
+                f"Standards 출처는 리뷰 자료의 저장소 규칙 문서({', '.join(CONTEXT_FILES)})다. "
                 f"스킬 절차대로 Standards와 Spec을 Agent 도구(subagent_type `{AXIS_AGENT}`)로 각각 서브에이전트에 맡긴다(두 축이 섞이지 않게, 직접 대신 보지 않는다). "
                 "사람에게 묻지 않는다(비대화형). 스킬이 묻는 것은 여기 주어진 것으로 정한다.\n"
                 f"스킬이 끝나면 그 보고서 전문을 report에 넣고, 결과를 아래 항목으로 옮긴다.\n\n{qg.minimal_text()}\n"
                 "확인하지 못한 항목은 unknown으로 둔다.")
     else:
-        task = (f"{qg.rubric_text()}\n\n큰 단위(루프 브랜치) 전체의 상세 리뷰다. A 구조와 B 구현·검증, 필수 게이트를 모두 채점한다. "
-                "B와 게이트의 테스트 근거는 아래 CI 결과다. 동작이 요구대로인지(특히 state 게이트)는 리뷰 자료의 spec 이슈 본문으로 판단한다. 채점 규칙은 리뷰 자료의 규칙 문서 \"채점\"·\"게이트\" 절이다. "
+        task = (f"{qg.rubric_text()}\n\n큰 단위(루프 브랜치) 전체의 상세 리뷰다. 평가표의 모든 그룹과 필수 게이트를 채점한다. "
+                "테스트 근거는 아래 CI 결과다. 동작이 요구대로인지는 리뷰 자료의 spec 이슈 본문으로 판단한다. 채점 규칙은 리뷰 자료의 \"채점 규칙\" 문서다. "
                 "확인하지 못한 항목은 quant·qual을 null로 둔다.")
     return compose(sha, task, evidence, material)
 

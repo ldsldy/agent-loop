@@ -7,15 +7,18 @@ import fnmatch
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+# 리뷰 대상 판정은 저장소 CI에 복사되는 템플릿 한 곳에 있다.
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "templates", "github", "scripts"))
 from loopconfig import CONFIG  # noqa: E402
+import review_scope  # noqa: E402
 
 REVIEW_PATHS = tuple(CONFIG["review_paths"])
 
 
 def touches_review(paths):
-    """리뷰 대상 경로를 하나라도 건드리는가. 건드리지 않는 변경(도구·문서·에이전트 설정)은 테스트·리뷰를 건너뛴다."""
-    return any(path.strip().startswith(REVIEW_PATHS) for path in paths)
+    return review_scope.touches_review(paths, REVIEW_PATHS)
 
 
 def is_test(path):

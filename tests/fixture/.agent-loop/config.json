@@ -4,7 +4,7 @@
   "test_globs": ["*/Tests/*"],
   "stats_only_globs": ["*.asset", "*.unity", "*.prefab", "*.meta", "*.csv", "*.json", "*.html", "*.png", "*.py", "*.md"],
   "full_diff_dirs": ["Packages", "ProjectSettings"],
-  "context_files": ["CLAUDE.md", "docs/agents/design-qa.md"],
+  "context_files": ["CLAUDE.md", "docs/agents/review-evidence.md"],
   "ci": {
     "results_artifact": "unity-test-results",
     "result_files": ["editmode-results.xml", "playmode-results.xml"]
@@ -14,5 +14,6 @@
     {"title": "python -I tools/review/design_qa.py (hard_fails는 치명적 결함)", "cmd": ["python", "-I", "tools/review/design_qa.py", "{tree}"]}
   ],
   "slice_test_hint": "이 조각이 만들거나 고친 테스트만 batchmode로 돌려(-testFilter, EditMode·PlayMode 해당되는 것만, 전체는 돌리지 않음)",
+  "loop_branch_ruleset": {"name": "loop-branches", "id": 27170373},
   "runner": {"task": "GitHubActionsRunner-Unity"}
 }

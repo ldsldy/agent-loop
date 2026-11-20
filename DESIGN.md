@@ -24,8 +24,11 @@ ShalomEng 저장소의 루프(마일스톤 → 루프 브랜치 → 조각 PR �
 - **증거 명령**: `{"title": "...", "cmd": [...]}`. 저장소 루트에서 돌고, 인자의 `{base}`·`{sha}`·`{tree}`(대상 커밋을 그대로 푼 폴더)를 바꿔 받는다.
   stdout이 리뷰 자료의 그 제목 아래 들어간다. 출력이 JSON 객체면 그 `hard_fails`가 최소 리뷰를 실패시킨다. 0이 아닌 종료는 리뷰를 멈춘다. ShalomEng의 `design_qa.py`(C# 의존 그래프·중복)와 패키지 보안 절(`Packages/packages-lock.json`)이 여기로 간다.
 - **CI 결과**: `config.ci.results_artifact`의 NUnit3 XML을 요약한다(Unity·.NET 공통 형식). 다른 형식은 필요해질 때 더한다.
-- **리뷰 대상 경로**: `config.review_paths` 한 곳. 플러그인 `scope.py`와 저장소 CI의 changes 잡이 같은 값을 읽는다
-  (CI는 플러그인이 없으므로 `config.json`을 파이썬 한 줄로 읽는다).
+- **리뷰 대상 경로**: 값은 `config.review_paths` 한 곳, 판정 코드는 `templates/github/scripts/review_scope.py` 한 곳.
+  플러그인 `scope.py`가 그 템플릿을 가져다 쓰고, 저장소 CI는 `loop-init`이 복사한 같은 파일을 돌린다.
+- **플러그인 관리 파일과 저장소 소유 파일**: `init.py`는 가드 워크플로·스크립트·`review_scope.py`를 플러그인 것으로 맞추고(`--update`),
+  `.agent-loop/`와 자동 머지 정책은 처음 한 번만 씨앗을 넣는다.
+- **채점 규칙**: `references/scoring.md`. `review.py`가 리뷰 자료 맨 앞에 싣고, 저장소 `context_files`가 뒤따른다.
 - **브랜치 이름**: `loop/<이름>`, `task/<루프>-<조각 id>`는 플러그인 규칙으로 고정한다. 기준 브랜치(`develop`)만 설정이다.
 
 ## ShalomEng에 남는 것

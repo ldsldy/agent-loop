@@ -1,0 +1,26 @@
+{
+  "_설명": "에이전트 역할별 모델과 노력 정도의 정본. 바꾸려면 이 파일만 고친다. effort를 적지 않은 역할·리뷰어는 default_effort를 쓴다. 읽는 곳: agent-loop 플러그인 scripts/loopconfig.py.",
+  "default_effort": "medium",
+  "orchestrator": {
+    "model": "opus"
+  },
+  "design": {
+    "_설명": "설계 세션. 오케스트레이터가 큰 단위·조각의 복잡도를 보고 고른다.",
+    "by_complexity": {"complex": "fable", "medium": "opus", "simple": "sonnet"}
+  },
+  "implement": {
+    "_설명": "구현 세션. 설계 노트를 보고 정말 복잡하면 complex.",
+    "by_complexity": {"complex": "fable", "default": "opus"}
+  },
+  "review": {
+    "minimal": {
+      "_설명": "조각 PR마다. reviewers의 Claude가 mattpocock code-review 스킬을 돌리고, 스킬의 두 축 서브에이전트는 subagent로 고정한다.",
+      "reviewers": {"claude": {"model": "sonnet"}},
+      "subagent": {"model": "sonnet"}
+    },
+    "detailed": {
+      "_설명": "큰 단위(루프 브랜치)가 끝났을 때. 리뷰어마다 A·B 85 이상.",
+      "reviewers": {"claude": {"model": "opus"}, "codex": {"model": "gpt-5.6-sol", "effort": "high"}}
+    }
+  }
+}

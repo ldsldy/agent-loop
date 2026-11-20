@@ -107,6 +107,17 @@ class ReviewMaterialTests(unittest.TestCase):
     def test_no_evidence_commands_means_no_parts(self):
         self.assertEqual(self.evidence_with()[0], ([], []))
 
+    def test_rules_start_with_the_plugin_scoring_doc_then_repo_files_at_the_target_commit(self):
+        original, rv.CONTEXT_FILES = rv.CONTEXT_FILES, ("docs/X.md",)
+        try:
+            with self.repo_with_changes() as (base, head):
+                parts = rv.rule_files(base)
+        finally:
+            rv.CONTEXT_FILES = original
+        self.assertTrue(parts[0].startswith("### 채점 규칙"))
+        self.assertIn("## 상세 리뷰 채점", parts[0])
+        self.assertEqual(parts[1], f"### docs/X.md (커밋 {base[:7]})\n" + "before\n" * 2 + "before")
+
     def test_detailed_diff_keeps_code_packages_and_settings_but_only_stats_for_data_files(self):
         with self.repo_with_changes() as (base, head):
             text = "\n".join(rv.diff_part(base, head))
