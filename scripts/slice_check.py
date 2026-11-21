@@ -39,7 +39,9 @@ def work_tree(root):
         index = os.path.join(tmp, "index")
         real = git("rev-parse", "--path-format=absolute", "--git-path", "index", cwd=root)
         if os.path.exists(real):
-            shutil.copy(real, index)
+            # 수정 시각까지 복사한다. git은 인덱스 파일의 시각으로 "같은 초에 같은 크기로 고친 파일"을 다시 읽을지 정한다.
+            # 시각이 지금으로 바뀌면 그런 파일을 안 바뀐 것으로 보고 옛 트리 해시를 낸다.
+            shutil.copy2(real, index)
         env = {**os.environ, "GIT_INDEX_FILE": index}
         git("add", "-A", cwd=root, env=env)
         return git("write-tree", cwd=root, env=env)

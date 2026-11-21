@@ -147,6 +147,15 @@ class TreeTests(unittest.TestCase):
             self.assertNotEqual(sc.work_tree(root), run("rev-parse", "HEAD^{tree}"))
             self.assertEqual(run("diff", "--cached", "--name-only"), "")
 
+    def test_same_size_edit_in_the_same_second_as_the_last_index_write_still_changes_the_hash(self):
+        with slice_repo() as (root, run):
+            path, index = os.path.join(root, "Assets/A.cs"), os.path.join(root, ".git", "index")
+            before = os.stat(path)
+            os.utime(index, (int(before.st_mtime), int(before.st_mtime)))  # 인덱스를 파일과 같은 초에 쓴 것으로 둔다
+            write(root, "Assets/A.cs", "class B {}\n")  # 크기가 같다
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))  # 같은 초에 고친 것처럼 수정 시각도 같다
+            self.assertNotEqual(sc.work_tree(root), run("rev-parse", "HEAD^{tree}"))
+
     def test_loop_base_is_the_longest_loop_name_the_task_branch_starts_with(self):
         with slice_repo("task/demo-ui-s2") as (root, run):
             run("update-ref", "refs/remotes/origin/loop/demo-ui", "HEAD")
