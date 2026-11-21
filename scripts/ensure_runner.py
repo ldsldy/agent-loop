@@ -37,6 +37,15 @@ def should_start(listed, host, running):
     return not running and not local_online(listed, host)
 
 
+def busy(listed, host):
+    return any(r["name"].lower() == host.lower() and r.get("busy") for r in listed)
+
+
+def local_busy():
+    """이 PC의 CI 실행기가 지금 작업 중인가. 같은 PC에서 Unity를 함께 띄우면 CI와 충돌한다. 상태를 못 읽으면 False(막지 않는다)."""
+    return busy(runners() or [], socket.gethostname())
+
+
 def describe(listed):
     return ", ".join(f"{r['name']} {r['status']}{' (작업 중)' if r.get('busy') else ''}" for r in listed) or "등록된 실행기 없음"
 

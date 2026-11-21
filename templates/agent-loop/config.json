@@ -9,6 +9,5 @@
     "results_artifact": "test-results",
     "result_files": ["test-results.xml"]
   },
-  "evidence": [],
-  "slice_test_hint": "이 조각이 만들거나 고친 테스트만 돌려(전체는 돌리지 않음)"
+  "evidence": []
 }

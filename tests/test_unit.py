@@ -73,6 +73,8 @@ class NextActionTests(unittest.TestCase):
         self.assertEqual(actions(state, merged), ["implement"])
         merged["task/code-cleanup-fix1"] = "MERGED"
         self.assertEqual(actions(state, merged), ["detailed-review"])
+        again = u.next_actions(state, merged, set(), max_improvements=2)[0]
+        self.assertEqual(again["previous"], "v.json", "재리뷰는 미달이던 리뷰에서 이어 간다")
         state["improvements"] = 2
         u.record_detailed(state, "failed", "v.json")
         self.assertEqual(actions(state, merged), ["stop"])

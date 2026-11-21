@@ -2,12 +2,11 @@
   "pass_score": 85,
   "max_improvements": 2,
   "max_penalty": 10,
-  "minimal_skill": "mattpocock-skills:code-review",
   "minimal_checks": [
-    {"id": "m1", "name": "수용 기준", "hint": "Spec 축 (a) 빠지거나 덜 된 요구, (c) 잘못 구현된 요구가 없는가. 근거는 PR 본문의 수용 기준"},
-    {"id": "m2", "name": "테스트 보존", "hint": "Standards 축: 기존 테스트를 지우거나 기대값을 완화·비활성화하지 않았는가(CLAUDE.md 테스트 규칙. 예외는 근거가 PR에 있을 때만)"},
-    {"id": "m3", "name": "범위", "hint": "Spec 축 (b) 요구하지 않은 동작(범위 밖 변경)이 없는가"},
-    {"id": "m4", "name": "구조 위반", "hint": "Standards 축: CLAUDE.md 설계 원칙의 명백한 위반이 없는가. 스멜은 판단 사항이라 그것만으로 fail하지 않는다"}
+    {"id": "m1", "name": "수용 기준", "hint": "PR 본문의 수용 기준 가운데 빠지거나 덜 되거나 잘못 구현된 것이 없는가"},
+    {"id": "m2", "name": "테스트 보존", "auto": "tests_kept", "hint": "기존 테스트를 지우거나 기대값을 완화·비활성화하지 않았는가(CLAUDE.md 테스트 규칙. 예외는 근거가 PR에 있을 때만)"},
+    {"id": "m3", "name": "범위", "auto": "declared_files", "hint": "요구하지 않은 동작(범위 밖 변경)이 없는가"},
+    {"id": "m4", "name": "구조 위반", "hint": "CLAUDE.md 설계 원칙의 명백한 위반이 없는가. 스멜은 판단 사항이라 그것만으로 fail하지 않는다"}
   ],
   "groups": {
     "a": {"title": "A 구조 품질", "items": [

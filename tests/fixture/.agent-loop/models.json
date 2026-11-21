@@ -14,9 +14,8 @@
   },
   "review": {
     "minimal": {
-      "_설명": "조각 PR마다. reviewers의 Claude가 mattpocock code-review 스킬을 돌리고, 스킬의 두 축 서브에이전트는 subagent로 고정한다.",
-      "reviewers": {"claude": {"model": "sonnet"}},
-      "subagent": {"model": "sonnet"}
+      "_설명": "조각 PR마다. 기계가 통과로 확정하지 못한 항목만 리뷰어 하나가 diff를 보고 판단한다. simple 조각은 리뷰어를 부르지 않는다.",
+      "reviewers": {"claude": {"model": "sonnet"}}
     },
     "detailed": {
       "_설명": "큰 단위(루프 브랜치)가 끝났을 때. 리뷰어마다 A·B 85 이상.",

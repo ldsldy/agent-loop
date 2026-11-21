@@ -147,10 +147,22 @@ class JudgeMinimalTests(unittest.TestCase):
         self.assertEqual(qg.judge_minimal([], "abc", OK_MACHINE)["verdict"], "incomplete")
         self.assertEqual(qg.judge_minimal([minimal(sha="old")], "abc", OK_MACHINE)["verdict"], "incomplete")
 
-    def test_minimal_schema_is_strict(self):
-        schema = qg.minimal_schema()
+    def test_checks_the_machine_settled_need_no_reviewer_answer(self):
+        machine = {"hard_fails": [], "passed": {"m2": "x", "m3": "x"}}
+        self.assertEqual(qg.open_checks(machine), ["m1", "m4"])
+        self.assertEqual(qg.judge_minimal([minimal(m2="unknown", m3="unknown")], "abc", machine)["verdict"], "pass")
+        self.assertEqual(qg.judge_minimal([minimal(m4="fail")], "abc", machine)["verdict"], "fail")
+
+    def test_when_everything_is_settled_or_deferred_no_reviewer_is_required(self):
+        machine = {"hard_fails": [], "passed": {"m2": "x", "m3": "x"}, "deferred": ["m1", "m4"]}
+        self.assertEqual(qg.judge_minimal([], "abc", machine)["verdict"], "pass")
+        self.assertEqual(qg.judge_minimal([], "abc", {**machine, "hard_fails": ["순환"]})["verdict"], "fail")
+
+    def test_minimal_schema_is_strict_and_asks_only_the_open_checks(self):
+        schema = qg.minimal_schema(["m1", "m4"])
         self.assertFalse(schema["additionalProperties"])
-        self.assertEqual(sorted(schema["properties"]["checks"]["required"]), sorted(i for i, *_ in qg.MINIMAL_CHECKS))
+        self.assertEqual(schema["properties"]["checks"]["required"], ["m1", "m4"])
+        self.assertNotIn("m2 ", qg.minimal_text(["m1", "m4"]))
 
 
 if __name__ == "__main__":

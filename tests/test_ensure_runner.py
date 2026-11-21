@@ -6,7 +6,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.environ["AGENT_LOOP_ROOT"] = os.path.join(HERE, "fixture")
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
-from ensure_runner import runner_task, should_start  # noqa: E402
+from ensure_runner import busy, runner_task, should_start  # noqa: E402
 
 HOST = "DESKTOP-Q3BJVJJ"
 
@@ -33,6 +33,13 @@ class ShouldStartTests(unittest.TestCase):
 
     def test_host_name_compare_ignores_case(self):
         self.assertFalse(should_start([runner(HOST, "online")], HOST.lower(), running=False))
+
+
+class BusyTests(unittest.TestCase):
+    def test_only_this_pc_running_a_job_counts_as_busy(self):
+        self.assertTrue(busy([{"name": HOST.lower(), "status": "online", "busy": True}], HOST))
+        self.assertFalse(busy([runner(HOST, "online"), {"name": "DESKTOP-OB7KNB1", "status": "online", "busy": True}], HOST))
+        self.assertFalse(busy([], HOST))
 
 
 class RunnerTaskTests(unittest.TestCase):

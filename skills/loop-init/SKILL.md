@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # 루프 설치
 
-저장소 하나에 루프를 깐다. 끝나면 `loop` 스킬로 첫 큰 단위를 고를 수 있다. 다시 돌려도 안전하다.
+Unity 저장소 하나에 루프를 깐다. 끝나면 `loop` 스킬로 첫 큰 단위를 고를 수 있다. 다시 돌려도 안전하다.
 
 ## 1. 파일 넣기
 
@@ -34,11 +34,11 @@ python -I "${CLAUDE_PLUGIN_ROOT}/scripts/init.py" --update   # 플러그인 관�
 | `context_files` | 리뷰 자료에 싣는 저장소 규칙 문서(설계 원칙·테스트 규칙이 있는 곳) |
 | `ci.results_artifact`, `ci.result_files` | CI가 올리는 테스트 결과 아티팩트 이름과 그 안의 NUnit3 XML 파일 이름 |
 | `evidence` | 리뷰 자료에 붙일 프로젝트 전용 검사. `{"title", "cmd"}`, 인자의 `{base}`·`{sha}`·`{tree}`가 바뀐다. JSON 출력의 `hard_fails`는 최소 리뷰를 실패시킨다 |
-| `slice_test_hint` | 구현 세션이 PR 전에 조각 테스트를 어떻게 돌리는지(구현 지시에 그대로 들어간다) |
 | `loop_branch_ruleset` (선택) | 루프 브랜치 생성을 막는 규칙 세트 `{"name", "id"}`. 시작 때 잠깐 끈다 |
-| `runner.task` (선택) | self-hosted 실행기를 켜는 Windows 로그온 작업. 있으면 `gh pr create` 뒤 훅이 실행기를 확인한다 |
+| `runner.task` (선택) | 이 PC의 self-hosted 실행기를 켜는 Windows 로그온 작업. 있으면 `gh pr create` 뒤 훅이 실행기를 확인하고, 실행기가 작업 중일 때는 조각 검사와 Unity batchmode 명령을 막는다 |
 
 `models.json`(역할별 모델), `rubric.json`(평가표)은 씨앗 그대로 써도 된다. 평가표 그룹별 배점 합은 100이어야 한다. 프로젝트 성격에 맞게 항목 설명을 고친다.
+최소 리뷰 항목의 `auto`(`tests_kept`, `declared_files`)는 기계가 통과를 확정하는 판정이다. 빼면 그 항목을 리뷰어가 본다.
 `.github/auto-merge-policy.json`의 `deny`·`allow`·`test_glob`을 이 저장소 경로로 맞춘다.
 
 다 바꾸면 `python -I "${CLAUDE_PLUGIN_ROOT}/scripts/quality_gate.py" --rubric`이 평가표를 출력해야 한다(설정을 읽지 못하면 이유를 말하고 멈춘다).
@@ -47,7 +47,7 @@ python -I "${CLAUDE_PLUGIN_ROOT}/scripts/init.py" --update   # 플러그인 관�
 
 사용자 확인을 받고 한다(외부 서비스 쓰기).
 
-- `base_branch`가 원격에 있다. 머지 방식은 squash만 허용한다.
+- `base_branch`가 원격에 있다. 머지 방식은 squash만 허용한다. 기준 브랜치는 직접 push와 강제 push를 규칙 세트로 막는다(기준 브랜치 머지는 사용자가 한다).
 - 라벨: `ready-for-agent`, `human`, `spec`, `low-risk`(정책의 `label`).
 - `loop/**` 규칙 세트: 필수 검사에 정책의 `required_checks`(씨앗은 `auto-merge-guard`). 루프 브랜치 생성까지 막으면 `loop_branch_ruleset`에 적는다.
 - 저장소 CI에 `python -I <플러그인>/scripts/init.py --check`를 넣어 플러그인 관리 파일이 플러그인 것과 같은지 검사한다. 플러그인은 커밋 SHA로 고정해 받고(`actions/checkout`의 `ref`), 비밀 토큰으로 받으면 `persist-credentials: false`를 둔다(뒤에 PR 코드가 돈다).
@@ -57,7 +57,9 @@ python -I "${CLAUDE_PLUGIN_ROOT}/scripts/init.py" --update   # 플러그인 관�
 
 - 저장소 `.claude/settings.json`에 이 플러그인의 마켓플레이스(`extraKnownMarketplaces`)와 `enabledPlugins`를 넣어 세션마다 켜지게 한다.
 - 저장소 `CLAUDE.md`에 한 줄을 둔다: 큰 단위 작업은 `loop` 스킬, 리뷰는 `loop-review` 스킬을 따른다. 설계 원칙과 테스트 규칙은 `CLAUDE.md`에 두고 `context_files`에 넣는다.
-- 최소 리뷰는 `rubric.json`의 `minimal_skill`(씨앗은 `mattpocock-skills:code-review`)을 쓴다. 그 플러그인이 없으면 설치하거나 쓰는 스킬로 바꾼다.
+- 저장소 `.claude/settings.json`의 `permissions.deny`에 되돌릴 수 없는 일을 넣는다(되돌릴 수 있는 일은 모델에 맡긴다). 씨앗:
+  `Read(./.env)`, `Read(./.env.*)`, `Read(./**/*.keystore)`, `Bash(git push --force:*)`, `Bash(git push -f:*)`, `Bash(git reset --hard:*)`, `Bash(git clean:*)`.
+  이 저장소에서 한 번 틀리면 되돌릴 수 없는 것(비밀 파일, 배포 명령)을 사용자와 더한다.
 - 리뷰어 실행에는 `claude` CLI가, `models.json`에 `codex` 리뷰어가 있으면 `codex` CLI가 필요하다. `gh`는 로그인돼 있어야 한다.
 
 ## 끝

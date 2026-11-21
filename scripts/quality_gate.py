@@ -1,7 +1,7 @@
 """품질 리뷰의 채점 공식과 판정. 절차는 loop-review 스킬. 항목·배점·게이트·한도는 저장소의 .agent-loop/rubric.json이다.
 
 리뷰는 두 단계다.
-- 최소 리뷰(PR마다): MINIMAL_REVIEWERS가 MINIMAL_CHECKS를 통과/실패로 본다. 증거 명령의 hard_fails 없음은 기계가 본다.
+- 최소 리뷰(PR마다): 기계가 통과로 확정하지 못한 MINIMAL_CHECKS만 MINIMAL_REVIEWERS가 통과/실패로 본다. 증거 명령의 hard_fails 없음은 기계가 본다.
 - 상세 리뷰(큰 단위 = 루프 브랜치가 끝났을 때): REQUIRED_REVIEWERS가 평가표 그룹(A 구조 × B 구현·검증 등)을 채점한다.
 
     python -I quality_gate.py --rubric                  # 상세 리뷰 항목·배점·게이트
@@ -28,10 +28,8 @@ MAX_IMPROVEMENTS = _RUBRIC["max_improvements"]  # 미달 뒤 개선·재채점 �
 MAX_PENALTY = _RUBRIC["max_penalty"]  # 첫 그룹(구조) 과잉 설계 감점 상한
 REQUIRED_REVIEWERS = tuple(MODELS["review"]["detailed"]["reviewers"])
 MINIMAL_REVIEWERS = tuple(MODELS["review"]["minimal"]["reviewers"])
-# 최소 리뷰의 판단은 이 스킬이 한다. 스킬 결과를 MINIMAL_CHECKS로 옮겨 통과/실패를 낸다.
-MINIMAL_SKILL = _RUBRIC["minimal_skill"]
-# (id, 이름, 설명: 스킬의 어느 축에서 읽는지)
-MINIMAL_CHECKS = [(c["id"], c["name"], c["hint"]) for c in _RUBRIC["minimal_checks"]]
+# (id, 이름, 설명, 기계 판정 이름 또는 None). 기계 판정(review.py의 AUTO)은 통과만 확정한다. 확정 못 하면 리뷰어가 본다.
+MINIMAL_CHECKS = [(c["id"], c["name"], c["hint"], c.get("auto")) for c in _RUBRIC["minimal_checks"]]
 # 그룹 → [(id, 이름, 배점, 설명)]. 첫 그룹이 감점(penalty)을 받는다.
 RUBRIC = {group: [(i["id"], i["name"], i["weight"], i["hint"]) for i in body["items"]] for group, body in _RUBRIC["groups"].items()}
 GROUP_TITLES = {group: body["title"] for group, body in _RUBRIC["groups"].items()}
@@ -155,21 +153,29 @@ def _issue():
                     "evidence": {"type": "string"}, "impact": {"type": "string"}, "fix": {"type": "string"}})
 
 
-def minimal_schema():
+def open_checks(machine):
+    """리뷰어가 봐야 하는 최소 리뷰 항목 id. 기계가 통과로 확정한 것(passed)과 상세 리뷰로 미룬 것(deferred)은 뺀다."""
+    settled = set(machine.get("passed", {})) | set(machine.get("deferred", []))
+    return [item for item, *_ in MINIMAL_CHECKS if item not in settled]
+
+
+def minimal_schema(items):
     check = _strict({"status": {"type": "string", "enum": ["pass", "fail", "unknown"]}, "evidence": {"type": "string"}})
-    return _strict({"checks": _strict({item: check for item, *_ in MINIMAL_CHECKS}),
-                    "issues": {"type": "array", "items": _issue()},
-                    "report": {"type": "string"}, "notes": {"type": "string"}})
+    return _strict({"checks": _strict({item: check for item in items}),
+                    "issues": {"type": "array", "items": _issue()}, "notes": {"type": "string"}})
 
 
 def judge_minimal(reviews, sha, machine):
-    """최소 리뷰 판정: pass · fail · incomplete. machine = {"hard_fails": [...]}(실행기가 잰 사실).
-    조각 PR은 CI를 돌리지 않으므로 CI 결론은 보지 않는다(2026-11-19 사용자 결정). 테스트 근거는 develop PR의 CI·상세 리뷰가 본다."""
+    """최소 리뷰 판정: pass · fail · incomplete. machine은 실행기가 잰 사실이다:
+    {"hard_fails": [...], "passed": {항목 id: 근거}, "deferred": [상세 리뷰로 미룬 항목 id]}. 남은 항목만 리뷰어 결과를 요구한다.
+    조각 PR은 CI를 돌리지 않으므로 CI 결론은 보지 않는다(2026-11-19 사용자 결정). 테스트 근거는 조각 검사와 develop PR의 CI가 본다."""
     reasons, failed = [], []
     if machine.get("hard_fails"):
         failed.append(f"증거 명령 hard_fails {machine['hard_fails']}")
+    remaining = open_checks(machine)
+    titles = {item: title for item, title, *_ in MINIMAL_CHECKS}
     names = [review.get("reviewer") for review in reviews]
-    for name in MINIMAL_REVIEWERS:
+    for name in MINIMAL_REVIEWERS if remaining else ():
         if name not in names:
             reasons.append(f"리뷰어 없음 {name}")
     for review in reviews:
@@ -177,19 +183,19 @@ def judge_minimal(reviews, sha, machine):
         if review.get("schema") != SCHEMA or review.get("git_sha") != sha:
             reasons.append(f"{name} 리뷰의 schema·git_sha가 대상 커밋 {sha}와 맞지 않음(무효)")
             continue
-        for item, title, _ in MINIMAL_CHECKS:
+        for item in remaining:
             status = review.get("checks", {}).get(item, {}).get("status", "unknown")
             if status == "fail":
-                failed.append(f"{name} {item} {title}")
+                failed.append(f"{name} {item} {titles[item]}")
             elif status != "pass":
-                reasons.append(f"{name} {item} {title} 확인 못 함")
+                reasons.append(f"{name} {item} {titles[item]} 확인 못 함")
     verdict = "fail" if failed else "incomplete" if reasons else "pass"
     return {"verdict": verdict, "git_sha": sha, "level": "minimal", "failed": failed, "reasons": reasons, "machine": machine}
 
 
-def minimal_text():
-    lines = [f"## 최소 리뷰 항목 (스킬 {MINIMAL_SKILL}의 결과를 옮긴다. 각각 pass·fail·unknown과 근거)"]
-    lines += [f"- {item} {name}: {hint}" for item, name, hint in MINIMAL_CHECKS]
+def minimal_text(items):
+    lines = ["## 최소 리뷰 항목 (각각 pass·fail·unknown과 근거)"]
+    lines += [f"- {item} {name}: {hint}" for item, name, hint, _ in MINIMAL_CHECKS if item in items]
     lines.append("하나라도 fail이면 실패, 확인하지 못한 것(unknown)이 있으면 미완료다. 점수는 매기지 않는다.")
     return "\n".join(lines)
 

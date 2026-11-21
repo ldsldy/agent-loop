@@ -95,7 +95,7 @@ def next_actions(unit, prs, live_branches, max_improvements):
             actions.append({"action": "implement", "slice": piece["id"], "branch": branch, **implement_model(piece),
                             "why": ("의존 조각이 모두 머지됐다" if piece["depends_on"] else "의존 없음")
                             + ". 시작 때 연 구현 세션에 SendMessage로 맡긴다(loop 스킬 \"세션 운영\"). "
-                            f"PR 전에 그 worktree에서 {CONFIG['slice_test_hint']}, 오류가 없으면 명령과 결과를 PR 본문에 적고 PR을 올린다"})
+                            "push 전에 그 worktree에서 조각 검사(slice_check.py: 컴파일과 바뀐 테스트)를 통과시키고 그 상태 그대로 커밋해 PR을 올린다"})
     gone = [task_branch(unit, p) for p in unit["slices"] if p["id"] in merged and task_branch(unit, p) in live_branches]
     if gone:
         actions.append({"action": "cleanup", "branches": gone, "why": "머지된 조각 브랜치가 남아 있다"})
@@ -103,9 +103,11 @@ def next_actions(unit, prs, live_branches, max_improvements):
         return actions
     detailed = unit["detailed"]["state"]
     if detailed == "pending":
+        previous = unit["detailed"].get("previous")
         actions.append({"action": "detailed-review", "base": f"origin/{CONFIG['base_branch']}",
-                        "why": f"조각이 모두 머지됐다: 루프 → {CONFIG['base_branch']} PR을 열고 그 PR의 CI(유일한 CI) run으로 상세 리뷰한다",
-                        "loop_branch": unit["loop_branch"]})
+                        "why": f"조각이 모두 머지됐다: 루프 → {CONFIG['base_branch']} PR을 열고 그 PR의 CI(유일한 CI) run으로 상세 리뷰한다"
+                        + (". 개선 뒤 재리뷰라 review.py에 --previous를 준다(이전 채점과 그 뒤의 diff만 본다)" if previous else ""),
+                        "loop_branch": unit["loop_branch"], **({"previous": previous} if previous else {})})
     elif detailed == "failed" and unit["improvements"] < max_improvements:
         actions.append({"action": "improve", "why": f"상세 리뷰 미달(개선 {unit['improvements']}/{max_improvements}회)",
                         "verdict": unit["detailed"]["verdict"]})
@@ -124,7 +126,8 @@ def add_slices(unit, slices, improvement):
     unit["slices"] += slices
     if improvement:
         unit["improvements"] += 1
-        unit["detailed"] = {"state": "pending", "verdict": None}
+        # 미달이던 리뷰를 남겨 둔다. 다음 상세 리뷰는 그 채점과 그 뒤의 diff만 본다(전체를 다시 싣지 않는다).
+        unit["detailed"] = {"state": "pending", "verdict": None, "previous": unit["detailed"]["verdict"]}
     return unit
 
 

@@ -1,7 +1,7 @@
 """품질 리뷰 실행기. 리뷰어는 같은 커밋·같은 자료를 받고, 서로의 결과를 보지 않고 동시에 채점한다.
 
-    # 최소 리뷰: 조각 PR마다. CI 없이(조각 PR은 CI를 돌리지 않는다) 리뷰어가 rubric.json의 minimal_skill로 보고 통과/실패 항목으로 옮긴다.
-    python -I review.py --level minimal --base origin/loop/<이름> --pr <번호>
+    # 최소 리뷰: 조각 PR마다. 기계가 통과로 확정하지 못한 항목만 리뷰어 하나가 diff를 보고 통과/실패를 낸다(simple 조각은 기계 판정만).
+    python -I review.py --level minimal --base origin/loop/<이름> --pr <번호> [--unit ci-results/loop/<이름>.json]
     # 상세 리뷰: 큰 단위(루프 브랜치)가 끝나 루프 → 기준 브랜치 PR을 열었을 때. 그 PR 커밋을 체크아웃하고 그 PR의 CI로.
     python -I review.py --level detailed --base origin/<기준 브랜치> --ci-run <run id> --spec <spec 이슈 번호...>
 
@@ -23,21 +23,61 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import quality_gate as qg  # noqa: E402
+import unit as units  # noqa: E402
 from loopconfig import CONFIG, MODELS, ROOT, effort  # noqa: E402
-from scope import REVIEW_PATHS, touches_review  # noqa: E402
+from scope import REVIEW_PATHS, is_test, touches_review  # noqa: E402
 
 TIMEOUT_S = 1800
 CONTEXT_FILES = tuple(CONFIG["context_files"])
 CONTEXT_LIMIT = 400_000  # 글자 수. 넘으면 변경을 나누라고 하고 멈춘다.
 # 단계별 리뷰어 모델·노력 정도는 .agent-loop/models.json의 review 절이 정한다.
 LEVELS = MODELS["review"]
-# 최소 리뷰 스킬의 두 축을 맡을 서브에이전트. 모델·노력 정도를 고정한다(부모를 따르지 않게).
-AXIS_AGENT = "review-axis"
+
+
+def changed_rows(base, sha):
+    """바뀐 파일의 (상태 글자, 경로들). 이름 변경은 옛 경로와 새 경로를 함께 준다(CI changes 잡의 previous_filename과 같게)."""
+    rows = [line.split("\t") for line in git("diff", "--name-status", "-M", f"{base}...{sha}").splitlines()]
+    return [(row[0][0], row[1:]) for row in rows]
 
 
 def changed_paths(base, sha):
-    """바뀐 파일 경로. 이름 변경은 옛 경로와 새 경로를 모두 넣는다(CI changes 잡의 previous_filename과 같게)."""
-    return [path for line in git("diff", "--name-status", "-M", f"{base}...{sha}").splitlines() for path in line.split("\t")[1:]]
+    return [path for _, paths in changed_rows(base, sha) for path in paths]
+
+
+def tests_kept(rows, piece):
+    if all(status == "A" for status, paths in rows if any(is_test(path) for path in paths)):
+        return "기존 테스트 파일을 고치거나 지우지 않았다"
+
+
+def declared_files(rows, piece):
+    """테스트가 아닌 바뀐 파일이 모두 조각의 files(파일이나 폴더) 안인가. Unity의 .meta는 짝 파일을 따른다."""
+    declared = [entry.rstrip("/") for entry in (piece or {}).get("files", [])]
+    paths = [path.removesuffix(".meta") for _, row in rows for path in row if not is_test(path)]
+    if declared and all(any(path == entry or path.startswith(entry + "/") for entry in declared) for path in paths):
+        return "테스트가 아닌 바뀐 파일이 모두 조각의 files 안이다"
+
+
+# rubric.json 최소 리뷰 항목의 auto 이름 → 판정. 통과를 확정하면 근거를, 못 하면 None을 돌려준다(그 항목은 리뷰어가 본다).
+AUTO = {"tests_kept": tests_kept, "declared_files": declared_files}
+
+
+def machine_facts(rows, piece, hard_fails):
+    """최소 리뷰에서 기계가 정하는 것. piece는 이 PR의 조각(상태 파일에서 찾지 못하면 None).
+    simple 조각이 기계 판정을 모두 통과하면 남은 항목은 상세 리뷰로 미룬다(리뷰어를 부르지 않는다)."""
+    passed = {item: why for item, _, _, auto in qg.MINIMAL_CHECKS if auto and (why := AUTO[auto](rows, piece))}
+    autos = [item for item, _, _, auto in qg.MINIMAL_CHECKS if auto]
+    simple = bool(piece) and piece["complexity"] == "simple" and bool(autos) and all(item in passed for item in autos)
+    deferred = [item for item, *_ in qg.MINIMAL_CHECKS if item not in passed] if simple else []
+    return {"hard_fails": hard_fails, "passed": passed, "deferred": deferred}
+
+
+def slice_of(state_path, branch):
+    """상태 파일에서 이 PR 브랜치의 조각을 찾는다. 상태 파일을 주지 않았거나 그 조각이 없으면 None."""
+    if not state_path:
+        return None
+    with open(state_path, encoding="utf-8") as file:
+        state = json.load(file)
+    return next((piece for piece in state["slices"] if units.task_branch(state, piece) == branch), None)
 
 
 def git(*args):
@@ -47,14 +87,10 @@ def git(*args):
 def claude_command(level, schema, schema_path, tmp):
     section = LEVELS[level]
     tools = ["Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)"]
-    extra = []
-    if level == "minimal":  # 최소 리뷰 스킬은 두 축을 서브에이전트로 돌리고 이슈·PR을 읽는다
-        tools += ["Skill", "Agent", "Bash(git rev-parse:*)", "Bash(gh issue view:*)", "Bash(gh pr view:*)"]
-        axis = {"description": "코드 리뷰의 한 축(Standards 또는 Spec)을 맡아 보고한다", "prompt": "맡은 축만 본다. 한국어로 쓴다.",
-                "model": section["subagent"]["model"], "effort": effort(section["subagent"])}
-        extra = ["--agents", json.dumps({AXIS_AGENT: axis}, ensure_ascii=False)]
+    if level == "minimal":  # 수용 기준이 가리키는 이슈를 읽는다
+        tools.append("Bash(gh issue view:*)")
     me = section["reviewers"]["claude"]
-    return ["claude", "-p", "--model", me["model"], "--effort", effort(me), *extra,
+    return ["claude", "-p", "--model", me["model"], "--effort", effort(me),
             "--output-format", "json", "--json-schema", json.dumps(schema, ensure_ascii=False), "--allowedTools", *tools]
 
 
@@ -183,11 +219,14 @@ def evidence_part(base, sha):
 SCORING = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "references", "scoring.md")
 
 
-def rule_files(sha):
-    """플러그인 채점 규칙과 저장소 규칙 문서(config.context_files, 대상 커밋 그대로) 전문. 프로젝트 전용 리뷰 도구도 쓴다."""
-    with open(SCORING, encoding="utf-8") as file:
-        scoring = f"### 채점 규칙 (agent-loop references/scoring.md)\n{file.read()}"
-    return [scoring] + [f"### {path} (커밋 {sha[:7]})\n{git('show', f'{sha}:{path}')}" for path in CONTEXT_FILES]
+def rule_files(sha, scoring=True):
+    """플러그인 채점 규칙과 저장소 규칙 문서(config.context_files, 대상 커밋 그대로) 전문. 프로젝트 전용 리뷰 도구도 쓴다.
+    최소 리뷰는 점수를 매기지 않으므로 채점 규칙을 싣지 않는다."""
+    parts = []
+    if scoring:
+        with open(SCORING, encoding="utf-8") as file:
+            parts.append(f"### 채점 규칙 (agent-loop references/scoring.md)\n{file.read()}")
+    return parts + [f"### {path} (커밋 {sha[:7]})\n{git('show', f'{sha}:{path}')}" for path in CONTEXT_FILES]
 
 
 # 상세 리뷰 diff에서 본문 대신 통계만 싣는 파일(데이터·에셋·도구·문서와 테스트). 큰 데이터 파일은 자료 한도를 넘긴다.
@@ -199,30 +238,48 @@ DATA_GLOBS = (*CONFIG["stats_only_globs"], *CONFIG["test_globs"])
 FULL_DIFF_DIRS = tuple(CONFIG["full_diff_dirs"])
 
 
-def diff_part(base, sha):
+def diff_part(base, sha, stats_globs=DATA_GLOBS):
+    """리뷰 자료의 diff. stats_globs에 맞는 파일은 본문 대신 통계만 싣는다. 최소 리뷰는 테스트 본문도 싣는다(테스트 보존을 볼 수 있게)."""
     commits = f"{base}...{sha}"
     full = [f":(exclude){folder}" for folder in FULL_DIFF_DIRS]
-    excludes = [f":(exclude){glob}" for glob in DATA_GLOBS]
+    excludes = [f":(exclude){glob}" for glob in stats_globs]
     parts = [f"### git diff {commits} (데이터·에셋 파일과 {'·'.join(FULL_DIFF_DIRS)} 제외)\n{git('diff', commits, '--', '.', *full, *excludes)}"]
     settings = git("diff", commits, "--", *FULL_DIFF_DIRS)
     if settings:
         parts.append(f"### git diff {commits} -- {' '.join(FULL_DIFF_DIRS)} (본문 전체)\n{settings}")
-    stat = git("diff", "--stat=200", commits, "--", *DATA_GLOBS, *full)
+    stat = git("diff", "--stat=200", commits, "--", *stats_globs, *full)
     if stat:
-        parts.append(f"### 데이터·에셋 파일 변경 통계(본문 생략: {', '.join(DATA_GLOBS)})\n{stat}")
+        parts.append(f"### 데이터·에셋 파일 변경 통계(본문 생략: {', '.join(stats_globs)})\n{stat}")
     return parts
 
 
-def context(base, sha, evidence, pr_text, with_diff, specs=()):
-    """리뷰어 모두에게 똑같이 주는 자료. Codex는 이 PC의 샌드박스에서 명령을 못 돌리므로 필요한 것을 싣는다."""
-    parts = rule_files(sha)
+def previous_reviews(verdict_path):
+    """이전 상세 리뷰의 (커밋, {리뷰어: 채점}). 개선 뒤 재리뷰가 리뷰어마다 자기 이전 채점에서 이어 가게 한다."""
+    with open(verdict_path, encoding="utf-8") as file:
+        sha = json.load(file)["git_sha"]
+    reviews = {}
+    for name in LEVEL_REVIEWERS["detailed"]:
+        path = os.path.join(os.path.dirname(verdict_path), f"{name}.json")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as file:
+                reviews[name] = json.load(file)
+    return sha, reviews
+
+
+def context(base, sha, evidence, pr_text, level, specs=(), earlier=None):
+    """리뷰어에게 주는 자료. Codex는 이 PC의 샌드박스에서 명령을 못 돌리므로 필요한 것을 싣는다.
+    earlier는 (이전 리뷰 커밋, 이 리뷰어의 이전 채점)이다. 있으면 diff는 그 커밋 뒤의 것만 싣는다."""
+    minimal = level == "minimal"
+    parts = rule_files(sha, scoring=not minimal)
     if pr_text:
         parts.append(f"### PR 본문(이 조각의 범위와 수용 기준)\n{pr_text}")
     parts += spec_part(specs)
     parts += evidence
+    if earlier:
+        base = earlier[0]
+        parts.append(f"### 이전 채점(커밋 {base[:7]}까지의 변경 전체를 보고 낸 결과)\n{json.dumps(earlier[1], ensure_ascii=False, indent=1)}")
     parts.append(f"### git log {base}..{sha}\n{git('log', '--format=%h %s', f'{base}..{sha}')}")
-    if with_diff:  # 최소 리뷰는 스킬의 두 축 서브에이전트가 diff를 직접 읽게 싣지 않는다
-        parts += diff_part(base, sha)
+    parts += diff_part(base, sha, tuple(CONFIG["stats_only_globs"]) if minimal else DATA_GLOBS)
     text = "\n\n".join(parts)
     if len(text) > CONTEXT_LIMIT:
         sys.exit(f"리뷰 자료가 {len(text)}자로 한도 {CONTEXT_LIMIT}자를 넘습니다. 변경을 나누세요.")
@@ -230,23 +287,26 @@ def context(base, sha, evidence, pr_text, with_diff, specs=()):
 
 
 # 최소 리뷰 프롬프트의 "CI 결과" 자리. 조각 PR은 CI를 돌리지 않는다(2026-11-19 사용자 결정).
-MINIMAL_EVIDENCE = ("조각 PR은 CI를 돌리지 않는다. 대신 구현 세션이 이 조각이 만들거나 고친 테스트만 로컬로 돌려 PR 본문에 명령과 결과를 적는다. "
-                    "테스트를 만들거나 고쳤는데 그 기록이 없거나 실패가 있으면 테스트 보존 항목을 fail로 둔다. 나머지는 코드·spec·범위로 판단한다. "
+MINIMAL_EVIDENCE = ("조각 PR은 CI를 돌리지 않는다. 대신 조각 검사(slice_check.py)가 이 커밋의 트리로 컴파일과 이 조각이 만들거나 고친 테스트를 돌렸고, "
+                    "통과 기록이 없는 커밋은 이 리뷰 전에 막힌다(pr_chain.sh). 테스트가 돌았는지는 따지지 않고 코드·spec·범위로 판단한다. "
                     "전체 테스트 근거는 루프 끝 기준 브랜치 PR의 CI가 본다.")
 
 
-def prompt(level, sha, evidence, material, base):
+INCREMENTAL = ("상세 리뷰 미달 뒤 개선분의 재리뷰다. 리뷰 자료의 \"이전 채점\"은 같은 리뷰어 자리에서 이전 커밋까지의 변경 전체를 보고 낸 결과이고, "
+               "diff는 그 뒤의 개선분만 있다. 이전 issues가 각각 고쳐졌는지 확인하고, 개선분이 영향을 준 항목의 등급·게이트만 고쳐 평가표 전체를 다시 낸다. "
+               "영향이 없는 항목은 이전 값과 근거를 그대로 옮긴다. 고쳐지지 않은 지적과 새로 생긴 문제는 issues에 적는다. ")
+
+
+def prompt(level, sha, evidence, material, machine=None, incremental=False):
     if level == "minimal":
-        task = (f"조각 PR 하나의 최소 리뷰다. 먼저 Skill 도구로 `{qg.MINIMAL_SKILL}`을 고정점 `{base}`로 실행한다. "
-                "Spec 출처는 리뷰 자료의 PR 본문(수용 기준)과 그 본문이 가리키는 이슈다. "
-                f"Standards 출처는 리뷰 자료의 저장소 규칙 문서({', '.join(CONTEXT_FILES)})다. "
-                f"스킬 절차대로 Standards와 Spec을 Agent 도구(subagent_type `{AXIS_AGENT}`)로 각각 서브에이전트에 맡긴다(두 축이 섞이지 않게, 직접 대신 보지 않는다). "
-                "사람에게 묻지 않는다(비대화형). 스킬이 묻는 것은 여기 주어진 것으로 정한다.\n"
-                f"스킬이 끝나면 그 보고서 전문을 report에 넣고, 결과를 아래 항목으로 옮긴다.\n\n{qg.minimal_text()}\n"
-                "확인하지 못한 항목은 unknown으로 둔다.")
+        settled = "".join(f"\n- {item}: {why}" for item, why in machine["passed"].items())
+        task = ("조각 PR 하나의 최소 리뷰다. 아래 항목만 판단한다. 수용 기준의 출처는 리뷰 자료의 PR 본문과 그 본문이 가리키는 이슈, "
+                f"규칙의 출처는 리뷰 자료의 저장소 규칙 문서({', '.join(CONTEXT_FILES)})다. 사람에게 묻지 않는다(비대화형).\n\n"
+                f"{qg.minimal_text(qg.open_checks(machine))}\n확인하지 못한 항목은 unknown으로 둔다."
+                + (f"\n\n기계가 이미 통과로 확정해 다시 보지 않는 항목:{settled}" if settled else ""))
     else:
         task = (f"{qg.rubric_text()}\n\n큰 단위(루프 브랜치) 전체의 상세 리뷰다. 평가표의 모든 그룹과 필수 게이트를 채점한다. "
-                "테스트 근거는 아래 CI 결과다. 동작이 요구대로인지는 리뷰 자료의 spec 이슈 본문으로 판단한다. 채점 규칙은 리뷰 자료의 \"채점 규칙\" 문서다. "
+                + (INCREMENTAL if incremental else "") + "테스트 근거는 아래 CI 결과다. 동작이 요구대로인지는 리뷰 자료의 spec 이슈 본문으로 판단한다. 채점 규칙은 리뷰 자료의 \"채점 규칙\" 문서다. "
                 "확인하지 못한 항목은 quant·qual을 null로 둔다.")
     return compose(sha, task, evidence, material)
 
@@ -269,6 +329,8 @@ CI 결과:
 
 
 def run_reviewers(level, schema, text, tmp):
+    """리뷰어를 동시에 돌린다. text는 모두에게 줄 프롬프트 하나거나 {리뷰어: 프롬프트}다."""
+    texts = text if isinstance(text, dict) else dict.fromkeys(LEVEL_REVIEWERS[level], text)
     schema_path = os.path.join(tmp, "schema.json")
     with open(schema_path, "w", encoding="utf-8") as file:
         json.dump(schema, file, ensure_ascii=False)
@@ -277,7 +339,7 @@ def run_reviewers(level, schema, text, tmp):
         files = [open(os.path.join(tmp, f"{name}.{kind}"), "w", encoding="utf-8") for kind in ("stdout", "log")]
         process = subprocess.Popen(REVIEWERS[name][0](level, schema, schema_path, tmp), cwd=ROOT, stdin=subprocess.PIPE,
                                    stdout=files[0], stderr=files[1], text=True, encoding="utf-8")
-        process.stdin.write(text)
+        process.stdin.write(texts[name])
         process.stdin.close()
         processes[name] = (process, files)
     outputs = {}
@@ -307,6 +369,8 @@ def main(argv):
     parser.add_argument("--base", required=True, help="비교 기준. 최소: origin/loop/<이름>, 상세: origin/<기준 브랜치>")
     parser.add_argument("--ci-run", help="상세 리뷰: 루프 → 기준 브랜치 PR 커밋의 CI 실행 id(필수). 최소 리뷰는 쓰지 않는다")
     parser.add_argument("--pr", help="최소 리뷰 대상 PR 번호(본문의 수용 기준을 리뷰어에게 준다)")
+    parser.add_argument("--unit", help="최소 리뷰: 큰 단위 상태 파일. 이 PR 조각의 files·complexity로 기계 판정을 한다(없으면 리뷰어가 모든 항목을 본다)")
+    parser.add_argument("--previous", help="상세 리뷰: 개선 뒤 재리뷰일 때 이전 상세 리뷰의 verdict.json. 리뷰어마다 자기 이전 채점과 그 뒤의 diff만 받는다")
     parser.add_argument("--spec", type=int, nargs="+", default=[], help="변경이 따르는 spec 이슈 번호(본문을 리뷰 자료에 싣는다). 상세 리뷰에는 필수, 루프가 다룬 spec 전부")
     args = parser.parse_args(argv)
     if args.level == "minimal" and not args.pr:
@@ -335,18 +399,28 @@ def main(argv):
     else:
         conclusion, evidence = None, MINIMAL_EVIDENCE
     evidence_parts, hard_fails = evidence_part(args.base, sha)
-    pr_text = ""
+    pr_text, machine = "", None
     if args.pr:
-        pr = json.loads(gh(["pr", "view", args.pr, "--json", "title,body"]))
+        pr = json.loads(gh(["pr", "view", args.pr, "--json", "title,body,headRefName"]))
         pr_text = f"{pr['title']}\n\n{pr['body']}"
-    schema = qg.minimal_schema() if args.level == "minimal" else qg.review_schema()
-    material = context(args.base, sha, evidence_parts, pr_text, with_diff=args.level == "detailed", specs=args.spec)
-    text = prompt(args.level, sha, evidence, material, args.base)
-
+        machine = machine_facts(changed_rows(args.base, sha), slice_of(args.unit, pr["headRefName"]), hard_fails)
+    minimal = args.level == "minimal"
+    # 기계가 모든 항목을 정했거나(통과 확정·미룸) 증거 명령이 이미 실패시켰으면 리뷰어를 부르지 않는다.
+    ask = not minimal or (qg.open_checks(machine) and not hard_fails)
     reviews = []
     # 리뷰 중에는 결과를 저장소 밖 임시 폴더에 둔다(리뷰어가 서로의 결과를 읽지 못하게).
     with tempfile.TemporaryDirectory() as tmp:
-        for name, data in run_reviewers(args.level, schema, text, tmp).items():
+        outputs = {}
+        if ask:
+            schema = qg.minimal_schema(qg.open_checks(machine)) if minimal else qg.review_schema()
+            before, earlier = previous_reviews(args.previous) if args.previous else (None, {})
+            texts = {}
+            for name in LEVEL_REVIEWERS[args.level]:  # 이전 채점이 없는 리뷰어는 전체 diff를 받는다
+                mine = (before, earlier[name]) if name in earlier else None
+                material = context(args.base, sha, evidence_parts, pr_text, args.level, specs=args.spec, earlier=mine)
+                texts[name] = prompt(args.level, sha, evidence, material, machine, incremental=bool(mine))
+            outputs = run_reviewers(args.level, schema, texts, tmp)
+        for name, data in outputs.items():
             for kind in ("stdout", "log"):
                 shutil.copy(os.path.join(tmp, f"{name}.{kind}"), out_dir)
             if data is None:
@@ -357,8 +431,8 @@ def main(argv):
             reviews.append(review)
 
     if args.level == "minimal":
-        verdict = qg.judge_minimal(reviews, sha, {"hard_fails": hard_fails})
-        summary = {key: verdict[key] for key in ("verdict", "failed", "reasons")}
+        verdict = qg.judge_minimal(reviews, sha, machine)
+        summary = {key: verdict[key] for key in ("verdict", "failed", "reasons", "machine")}
         passed = verdict["verdict"] == "pass"
     else:
         verdict = qg.judge_all(reviews, sha, conclusion)

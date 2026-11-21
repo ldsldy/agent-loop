@@ -14,7 +14,7 @@ EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 class AgentModelsTests(unittest.TestCase):
     def test_every_role_has_a_model_and_a_valid_effort(self):
         self.assertIn(MODELS["default_effort"], EFFORTS)
-        sections = [MODELS["orchestrator"], MODELS["design"], MODELS["implement"], MODELS["review"]["minimal"]["subagent"],
+        sections = [MODELS["orchestrator"], MODELS["design"], MODELS["implement"],
                     *(r for level in MODELS["review"].values() for r in level["reviewers"].values())]
         for section in sections:
             self.assertIn(effort(section), EFFORTS)
@@ -23,7 +23,6 @@ class AgentModelsTests(unittest.TestCase):
         self.assertIn("default", MODELS["implement"]["by_complexity"])
 
     def test_review_levels_name_reviewers_with_models(self):
-        self.assertTrue(MODELS["review"]["minimal"]["subagent"]["model"])
         for level in ("minimal", "detailed"):
             reviewers = MODELS["review"][level]["reviewers"]
             self.assertTrue(reviewers)
