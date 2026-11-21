@@ -1,6 +1,6 @@
 """품질 리뷰 실행기. 리뷰어는 같은 커밋·같은 자료를 받고, 서로의 결과를 보지 않고 동시에 채점한다.
 
-    # 최소 리뷰: 조각 PR마다. 기계가 통과로 확정하지 못한 항목만 리뷰어 하나가 diff를 보고 통과/실패를 낸다(simple 조각은 기계 판정만).
+    # 최소 리뷰: 조각 PR마다. 머지 문은 기계가 지키고, 늦게 잡으면 비싼 조각만 리뷰어 하나가 그 조각의 수용 기준을 diff와 대조한다.
     python -I review.py --level minimal --base origin/loop/<이름> --pr <번호> [--unit <상태 파일>]
     # 상세 리뷰: 큰 단위(루프 브랜치)가 끝나 루프 → 기준 브랜치 PR을 열었을 때. 그 PR 커밋을 체크아웃하고 그 PR의 CI로.
     python -I review.py --level detailed --base origin/<기준 브랜치> --ci-run <run id> --spec <spec 이슈 번호...>
@@ -23,6 +23,7 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import quality_gate as qg  # noqa: E402
+import shape  # noqa: E402
 import unit as units  # noqa: E402
 from loopconfig import CONFIG, MODELS, ROOT, effort  # noqa: E402
 from scope import REVIEW_PATHS, is_test, touches_review  # noqa: E402
@@ -44,40 +45,60 @@ def changed_paths(base, sha):
     return [path for _, paths in changed_rows(base, sha) for path in paths]
 
 
-def tests_kept(rows, piece):
-    if all(status == "A" for status, paths in rows if any(is_test(path) for path in paths)):
-        return "기존 테스트 파일을 고치거나 지우지 않았다"
+def outside_declared(rows, piece):
+    """테스트가 아닌 바뀐 파일 중 조각의 files(파일이나 폴더) 밖에 있는 것. Unity의 .meta는 짝 파일을 따른다."""
+    declared = [entry.rstrip("/") for entry in piece.get("files", [])]
+    paths = dict.fromkeys(path.removesuffix(".meta") for _, row in rows for path in row if not is_test(path))
+    return [path for path in paths if not any(path == entry or path.startswith(entry + "/") for entry in declared)]
 
 
-def declared_files(rows, piece):
-    """테스트가 아닌 바뀐 파일이 모두 조각의 files(파일이나 폴더) 안인가. Unity의 .meta는 짝 파일을 따른다."""
-    declared = [entry.rstrip("/") for entry in (piece or {}).get("files", [])]
-    paths = [path.removesuffix(".meta") for _, row in rows for path in row if not is_test(path)]
-    if declared and all(any(path == entry or path.startswith(entry + "/") for entry in declared) for path in paths):
-        return "테스트가 아닌 바뀐 파일이 모두 조각의 files 안이다"
+def machine_facts(rows, piece, dependents, hard_fails):
+    """최소 리뷰에서 기계가 정하는 것: 증거 명령의 hard_fails, 리뷰어를 부르는 이유, 대조할 수용 기준.
+    조각의 머지 문은 기계가 지킨다(조각 검사·모양 검사). 리뷰어는 늦게 잡으면 비싼 조각에만 부른다:
+    다른 조각이 의존하는 조각, complex 조각, 선언한 files 밖을 건드린 조각. 나머지 조각의 수용 기준은 루프 끝 상세 리뷰가 대조한다."""
+    if piece is None:
+        return {"hard_fails": hard_fails, "review": ["상태 파일에서 이 PR의 조각을 찾지 못했다"], "criteria": ["PR 본문에 적힌 수용 기준 전부"]}
+    review = []
+    if dependents:
+        review.append(f"다른 조각이 의존한다({', '.join(dependents)})")
+    if piece["complexity"] == "complex":
+        review.append("complex 조각이다")
+    outside = outside_declared(rows, piece)
+    if outside:
+        review.append(f"선언한 files 밖을 건드렸다({', '.join(outside[:5])})")
+    return {"hard_fails": hard_fails, "review": review, "criteria": list(piece["acceptance"])}
 
 
-# rubric.json 최소 리뷰 항목의 auto 이름 → 판정. 통과를 확정하면 근거를, 못 하면 None을 돌려준다(그 항목은 리뷰어가 본다).
-AUTO = {"tests_kept": tests_kept, "declared_files": declared_files}
-
-
-def machine_facts(rows, piece, hard_fails):
-    """최소 리뷰에서 기계가 정하는 것. piece는 이 PR의 조각(상태 파일에서 찾지 못하면 None).
-    simple 조각이 기계 판정을 모두 통과하면 남은 항목은 상세 리뷰로 미룬다(리뷰어를 부르지 않는다)."""
-    passed = {item: why for item, _, _, auto in qg.MINIMAL_CHECKS if auto and (why := AUTO[auto](rows, piece))}
-    autos = [item for item, _, _, auto in qg.MINIMAL_CHECKS if auto]
-    simple = bool(piece) and piece["complexity"] == "simple" and bool(autos) and all(item in passed for item in autos)
-    deferred = [item for item, *_ in qg.MINIMAL_CHECKS if item not in passed] if simple else []
-    return {"hard_fails": hard_fails, "passed": passed, "deferred": deferred}
+def load_state(state_path):
+    with open(state_path, encoding="utf-8") as file:
+        return json.load(file)
 
 
 def slice_of(state_path, branch):
-    """상태 파일에서 이 PR 브랜치의 조각을 찾는다. 상태 파일을 주지 않았거나 그 조각이 없으면 None."""
+    """상태 파일에서 이 PR 브랜치의 (조각, 그 조각에 의존하는 조각 id들). 상태 파일을 주지 않았거나 그 조각이 없으면 (None, [])."""
     if not state_path:
-        return None
-    with open(state_path, encoding="utf-8") as file:
-        state = json.load(file)
-    return next((piece for piece in state["slices"] if units.task_branch(state, piece) == branch), None)
+        return None, []
+    state = load_state(state_path)
+    piece = next((piece for piece in state["slices"] if units.task_branch(state, piece) == branch), None)
+    if piece is None:
+        return None, []
+    return piece, [other["id"] for other in state["slices"] if piece["id"] in other.get("depends_on", [])]
+
+
+def loop_parts(state_path, base):
+    """상세 리뷰 자료: 조각별 수용 기준(물러난 테스트·허용된 모양 예외 포함)과 기준 브랜치 뒤의 모양 변화."""
+    parts = []
+    if state_path:
+        lines = []
+        for piece in load_state(state_path)["slices"]:
+            lines.append(f"#### {piece['id']} {piece.get('title', '')} ({piece.get('kind', '?')})")
+            lines += [f"- {wanted}" for wanted in piece.get("acceptance", [])]
+            lines += [f"- 물러난 테스트 {path}: {why}" for path, why in piece.get("retire", {}).items()]
+            lines += [f"- 허용된 모양 예외 {subject}: {why}" for subject, why in piece.get("allow", {}).items()]
+        parts.append("### 조각별 수용 기준(diff와 대조한다)\n" + "\n".join(lines))
+    if "shape" in CONFIG:
+        parts.append(f"### 모양 변화({base} → 이 커밋, 테스트 제외 C#)\n" + "\n".join(shape.report(ROOT, base, CONFIG["shape"], is_test)))
+    return parts
 
 
 def git(*args):
@@ -266,7 +287,7 @@ def previous_reviews(verdict_path):
     return sha, reviews
 
 
-def context(base, sha, evidence, pr_text, level, specs=(), earlier=None):
+def context(base, sha, evidence, pr_text, level, specs=(), earlier=None, extra=()):
     """리뷰어에게 주는 자료. Codex는 이 PC의 샌드박스에서 명령을 못 돌리므로 필요한 것을 싣는다.
     earlier는 (이전 리뷰 커밋, 이 리뷰어의 이전 채점)이다. 있으면 diff는 그 커밋 뒤의 것만 싣는다."""
     minimal = level == "minimal"
@@ -275,6 +296,7 @@ def context(base, sha, evidence, pr_text, level, specs=(), earlier=None):
         parts.append(f"### PR 본문(이 조각의 범위와 수용 기준)\n{pr_text}")
     parts += spec_part(specs)
     parts += evidence
+    parts += extra
     if earlier:
         base = earlier[0]
         parts.append(f"### 이전 채점(커밋 {base[:7]}까지의 변경 전체를 보고 낸 결과)\n{json.dumps(earlier[1], ensure_ascii=False, indent=1)}")
@@ -297,15 +319,21 @@ INCREMENTAL = ("상세 리뷰 미달 뒤 개선분의 재리뷰다. 리뷰 자�
                "영향이 없는 항목은 이전 값과 근거를 그대로 옮긴다. 고쳐지지 않은 지적과 새로 생긴 문제는 issues에 적는다. ")
 
 
+SUBTRACT = ("구조 그룹은 뺄셈부터 본다. 이 변경에서 지우거나, 합치거나, 인라인할 수 있는 타입·계층·파일을 먼저 찾아 issues에 적는다. "
+            "지금 쓰는 곳이 없는 확장점, 구현이 하나뿐인 인터페이스, 자식이 하나뿐인 베이스 클래스를 좋은 구조로 채점하지 않는다. "
+            "리뷰 자료의 \"조각별 수용 기준\"을 diff와 하나씩 대조한다(UXML·USS의 수치 포함). \"모양 변화\"의 숫자도 근거로 쓴다. ")
+
+
 def prompt(level, sha, evidence, material, machine=None, incremental=False):
     if level == "minimal":
-        settled = "".join(f"\n- {item}: {why}" for item, why in machine["passed"].items())
-        task = ("조각 PR 하나의 최소 리뷰다. 아래 항목만 판단한다. 수용 기준의 출처는 리뷰 자료의 PR 본문과 그 본문이 가리키는 이슈, "
-                f"규칙의 출처는 리뷰 자료의 저장소 규칙 문서({', '.join(CONTEXT_FILES)})다. 사람에게 묻지 않는다(비대화형).\n\n"
-                f"{qg.minimal_text(qg.open_checks(machine))}\n확인하지 못한 항목은 unknown으로 둔다."
-                + (f"\n\n기계가 이미 통과로 확정해 다시 보지 않는 항목:{settled}" if settled else ""))
+        task = ("조각 PR 하나의 수용 기준 대조다. 기준마다 diff에서 그대로 지켜졌는지만 본다(UXML·USS의 수치 포함). 구조와 범위는 보지 않는다. "
+                "그것은 기계 검사와 루프 끝 상세 리뷰의 일이다. 기준의 출처는 아래 목록과 리뷰 자료의 PR 본문, 그 본문이 가리키는 이슈다. "
+                f"사람에게 묻지 않는다(비대화형). 이 조각을 리뷰하는 이유: {'; '.join(machine['review'])}.\n\n"
+                f"{qg.minimal_text(machine['criteria'])}\n확인하지 못한 기준은 unknown으로 둔다.")
     else:
-        task = (f"{qg.rubric_text()}\n\n큰 단위(루프 브랜치) 전체의 상세 리뷰다. 평가표의 모든 그룹과 필수 게이트를 채점한다. "
+        editor = CONFIG.get("editor_globs")
+        task = (f"{qg.rubric_text()}\n\n큰 단위(루프 브랜치) 전체의 상세 리뷰다. 평가표의 모든 그룹과 필수 게이트를 채점한다. " + SUBTRACT
+                + (f"에디터 코드({', '.join(editor)})는 수용 기준대로 됐는지만 보고, 구조·런타임 항목의 근거로 쓰지 않는다. " if editor else "")
                 + (INCREMENTAL if incremental else "") + "테스트 근거는 아래 CI 결과다. 동작이 요구대로인지는 리뷰 자료의 spec 이슈 본문으로 판단한다. 채점 규칙은 리뷰 자료의 \"채점 규칙\" 문서다. "
                 "확인하지 못한 항목은 quant·qual을 null로 둔다.")
     return compose(sha, task, evidence, material)
@@ -369,7 +397,7 @@ def main(argv):
     parser.add_argument("--base", required=True, help="비교 기준. 최소: origin/loop/<이름>, 상세: origin/<기준 브랜치>")
     parser.add_argument("--ci-run", help="상세 리뷰: 루프 → 기준 브랜치 PR 커밋의 CI 실행 id(필수). 최소 리뷰는 쓰지 않는다")
     parser.add_argument("--pr", help="최소 리뷰 대상 PR 번호(본문의 수용 기준을 리뷰어에게 준다)")
-    parser.add_argument("--unit", help="최소 리뷰: 큰 단위 상태 파일. 이 PR 조각의 files·complexity로 기계 판정을 한다(없으면 리뷰어가 모든 항목을 본다)")
+    parser.add_argument("--unit", help="큰 단위 상태 파일. 최소 리뷰는 이 PR 조각의 수용 기준과 리뷰어를 부를지를, 상세 리뷰는 조각별 수용 기준을 여기서 읽는다")
     parser.add_argument("--previous", help="상세 리뷰: 개선 뒤 재리뷰일 때 이전 상세 리뷰의 verdict.json. 리뷰어마다 자기 이전 채점과 그 뒤의 diff만 받는다")
     parser.add_argument("--spec", type=int, nargs="+", default=[], help="변경이 따르는 spec 이슈 번호(본문을 리뷰 자료에 싣는다). 상세 리뷰에는 필수, 루프가 다룬 spec 전부")
     args = parser.parse_args(argv)
@@ -403,21 +431,22 @@ def main(argv):
     if args.pr:
         pr = json.loads(gh(["pr", "view", args.pr, "--json", "title,body,headRefName"]))
         pr_text = f"{pr['title']}\n\n{pr['body']}"
-        machine = machine_facts(changed_rows(args.base, sha), slice_of(args.unit, pr["headRefName"]), hard_fails)
+        machine = machine_facts(changed_rows(args.base, sha), *slice_of(args.unit, pr["headRefName"]), hard_fails)
     minimal = args.level == "minimal"
-    # 기계가 모든 항목을 정했거나(통과 확정·미룸) 증거 명령이 이미 실패시켰으면 리뷰어를 부르지 않는다.
-    ask = not minimal or (qg.open_checks(machine) and not hard_fails)
+    # 리뷰어를 부를 이유가 없는 조각이거나 증거 명령이 이미 실패시켰으면 리뷰어를 부르지 않는다.
+    ask = not minimal or (machine["review"] and not hard_fails)
+    extra = [] if minimal else loop_parts(args.unit, args.base)
     reviews = []
     # 리뷰 중에는 결과를 저장소 밖 임시 폴더에 둔다(리뷰어가 서로의 결과를 읽지 못하게).
     with tempfile.TemporaryDirectory() as tmp:
         outputs = {}
         if ask:
-            schema = qg.minimal_schema(qg.open_checks(machine)) if minimal else qg.review_schema()
+            schema = qg.minimal_schema(len(machine["criteria"])) if minimal else qg.review_schema()
             before, earlier = previous_reviews(args.previous) if args.previous else (None, {})
             texts = {}
             for name in LEVEL_REVIEWERS[args.level]:  # 이전 채점이 없는 리뷰어는 전체 diff를 받는다
                 mine = (before, earlier[name]) if name in earlier else None
-                material = context(args.base, sha, evidence_parts, pr_text, args.level, specs=args.spec, earlier=mine)
+                material = context(args.base, sha, evidence_parts, pr_text, args.level, specs=args.spec, earlier=mine, extra=extra)
                 texts[name] = prompt(args.level, sha, evidence, material, machine, incremental=bool(mine))
             outputs = run_reviewers(args.level, schema, texts, tmp)
         for name, data in outputs.items():

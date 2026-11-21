@@ -1,7 +1,7 @@
 """품질 리뷰의 채점 공식과 판정. 절차는 loop-review 스킬. 항목·배점·게이트·한도는 저장소의 .agent-loop/rubric.json이다.
 
 리뷰는 두 단계다.
-- 최소 리뷰(PR마다): 기계가 통과로 확정하지 못한 MINIMAL_CHECKS만 MINIMAL_REVIEWERS가 통과/실패로 본다. 증거 명령의 hard_fails 없음은 기계가 본다.
+- 최소 리뷰(PR마다): 머지 문은 기계가 지킨다. 늦게 잡으면 비싼 조각만 MINIMAL_REVIEWERS가 그 조각의 수용 기준을 하나씩 대조한다.
 - 상세 리뷰(큰 단위 = 루프 브랜치가 끝났을 때): REQUIRED_REVIEWERS가 평가표 그룹(A 구조 × B 구현·검증 등)을 채점한다.
 
     python -I quality_gate.py --rubric                  # 상세 리뷰 항목·배점·게이트
@@ -9,7 +9,7 @@
 
 리뷰 JSON(schema agent-loop-quality-v1)은 리뷰어 한 명의 채점이다:
 ratings.<id> = {quant: 0~4, qual: 0~4, evidence}, gates.<id> = {status: pass|fail|na|unchecked, evidence},
-penalty·penaltyReason(첫 그룹 과잉 설계 감점), critical·criticalEvidence, issues, notes. 변경 시나리오 증거는 gates에 적는다.
+critical·criticalEvidence, issues, notes. 과잉 설계는 감점이 아니라 게이트로 본다.
 REQUIRED_REVIEWERS 모두가 대상 커밋(git_sha)을 채점하고 각자 통과해야 승인 가능이다. 평균 내지 않는다.
 채점 공식과 판정 규칙은 이 파일 한 곳에, 리뷰어와 모델은 .agent-loop/models.json에 둔다.
 """
@@ -25,15 +25,11 @@ from loopconfig import MODELS, RUBRIC as _RUBRIC  # noqa: E402
 SCHEMA = "agent-loop-quality-v1"
 PASS_SCORE = _RUBRIC["pass_score"]
 MAX_IMPROVEMENTS = _RUBRIC["max_improvements"]  # 미달 뒤 개선·재채점 반복 한도
-MAX_PENALTY = _RUBRIC["max_penalty"]  # 첫 그룹(구조) 과잉 설계 감점 상한
 REQUIRED_REVIEWERS = tuple(MODELS["review"]["detailed"]["reviewers"])
 MINIMAL_REVIEWERS = tuple(MODELS["review"]["minimal"]["reviewers"])
-# (id, 이름, 설명, 기계 판정 이름 또는 None). 기계 판정(review.py의 AUTO)은 통과만 확정한다. 확정 못 하면 리뷰어가 본다.
-MINIMAL_CHECKS = [(c["id"], c["name"], c["hint"], c.get("auto")) for c in _RUBRIC["minimal_checks"]]
-# 그룹 → [(id, 이름, 배점, 설명)]. 첫 그룹이 감점(penalty)을 받는다.
+# 그룹 → [(id, 이름, 배점, 설명)]
 RUBRIC = {group: [(i["id"], i["name"], i["weight"], i["hint"]) for i in body["items"]] for group, body in _RUBRIC["groups"].items()}
 GROUP_TITLES = {group: body["title"] for group, body in _RUBRIC["groups"].items()}
-PENALTY_GROUP = next(iter(RUBRIC))
 # (id, 이름, 설명, 비대상 허용)
 GATES = [(g["id"], g["name"], g["hint"], g["allow_na"]) for g in _RUBRIC["gates"]]
 
@@ -56,8 +52,6 @@ def group_score(review, group):
     missing = [item for item, s in scores.items() if s is None]
     unevidenced = [item for item, *_ in RUBRIC[group] if not str(ratings.get(item, {}).get("evidence", "")).strip()]
     total = sum(s for s in scores.values() if s is not None)
-    if group == PENALTY_GROUP:
-        total = max(0.0, total - max(0, min(MAX_PENALTY, review.get("penalty", 0) or 0)))
     return {"score": None if missing else round(total, 1), "missing": missing, "unevidenced": unevidenced}
 
 
@@ -90,8 +84,6 @@ def judge(review):
         return verdict("blocked", [f"게이트 실패 {failed}"])
 
     reasons = []
-    if (review.get("penalty", 0) or 0) and not str(review.get("penaltyReason", "")).strip():
-        reasons.append("과잉 설계 감점에 사유가 없음")
     groups = [(key.upper(), result[key]) for key in RUBRIC]
     for name, group in groups:
         if group["missing"]:
@@ -153,29 +145,28 @@ def _issue():
                     "evidence": {"type": "string"}, "impact": {"type": "string"}, "fix": {"type": "string"}})
 
 
-def open_checks(machine):
-    """리뷰어가 봐야 하는 최소 리뷰 항목 id. 기계가 통과로 확정한 것(passed)과 상세 리뷰로 미룬 것(deferred)은 뺀다."""
-    settled = set(machine.get("passed", {})) | set(machine.get("deferred", []))
-    return [item for item, *_ in MINIMAL_CHECKS if item not in settled]
+def criteria_ids(count):
+    return [f"c{number}" for number in range(1, count + 1)]
 
 
-def minimal_schema(items):
+def minimal_schema(count):
+    """수용 기준 대조의 출력. 기준마다(c1, c2, …) 지켰는지와 근거를 낸다."""
     check = _strict({"status": {"type": "string", "enum": ["pass", "fail", "unknown"]}, "evidence": {"type": "string"}})
-    return _strict({"checks": _strict({item: check for item in items}),
+    return _strict({"checks": _strict({item: check for item in criteria_ids(count)}),
                     "issues": {"type": "array", "items": _issue()}, "notes": {"type": "string"}})
 
 
 def judge_minimal(reviews, sha, machine):
     """최소 리뷰 판정: pass · fail · incomplete. machine은 실행기가 잰 사실이다:
-    {"hard_fails": [...], "passed": {항목 id: 근거}, "deferred": [상세 리뷰로 미룬 항목 id]}. 남은 항목만 리뷰어 결과를 요구한다.
+    {"hard_fails": [...], "review": [리뷰어를 부른 이유...], "criteria": [이 조각의 수용 기준...]}.
+    review가 비면 기계 검사만으로 머지하는 조각이라 리뷰어 결과를 요구하지 않는다. 아니면 수용 기준마다 리뷰어의 pass가 있어야 한다.
     조각 PR은 CI를 돌리지 않으므로 CI 결론은 보지 않는다(2026-11-19 사용자 결정). 테스트 근거는 조각 검사와 develop PR의 CI가 본다."""
     reasons, failed = [], []
     if machine.get("hard_fails"):
         failed.append(f"증거 명령 hard_fails {machine['hard_fails']}")
-    remaining = open_checks(machine)
-    titles = {item: title for item, title, *_ in MINIMAL_CHECKS}
+    criteria = machine.get("criteria", []) if machine.get("review") else []
     names = [review.get("reviewer") for review in reviews]
-    for name in MINIMAL_REVIEWERS if remaining else ():
+    for name in MINIMAL_REVIEWERS if criteria else ():
         if name not in names:
             reasons.append(f"리뷰어 없음 {name}")
     for review in reviews:
@@ -183,19 +174,19 @@ def judge_minimal(reviews, sha, machine):
         if review.get("schema") != SCHEMA or review.get("git_sha") != sha:
             reasons.append(f"{name} 리뷰의 schema·git_sha가 대상 커밋 {sha}와 맞지 않음(무효)")
             continue
-        for item in remaining:
+        for item, wanted in zip(criteria_ids(len(criteria)), criteria):
             status = review.get("checks", {}).get(item, {}).get("status", "unknown")
             if status == "fail":
-                failed.append(f"{name} {item} {titles[item]}")
+                failed.append(f"{name} {item} {wanted[:80]}")
             elif status != "pass":
-                reasons.append(f"{name} {item} {titles[item]} 확인 못 함")
+                reasons.append(f"{name} {item} 확인 못 함: {wanted[:80]}")
     verdict = "fail" if failed else "incomplete" if reasons else "pass"
     return {"verdict": verdict, "git_sha": sha, "level": "minimal", "failed": failed, "reasons": reasons, "machine": machine}
 
 
-def minimal_text(items):
-    lines = ["## 최소 리뷰 항목 (각각 pass·fail·unknown과 근거)"]
-    lines += [f"- {item} {name}: {hint}" for item, name, hint, _ in MINIMAL_CHECKS if item in items]
+def minimal_text(criteria):
+    lines = ["## 수용 기준 대조 (기준마다 pass·fail·unknown과 근거. 근거는 파일과 줄)"]
+    lines += [f"- {item}: {wanted}" for item, wanted in zip(criteria_ids(len(criteria)), criteria)]
     lines.append("하나라도 fail이면 실패, 확인하지 못한 것(unknown)이 있으면 미완료다. 점수는 매기지 않는다.")
     return "\n".join(lines)
 
@@ -205,7 +196,6 @@ def review_schema():
     rating = _strict({"quant": _grade(), "qual": _grade(), "evidence": {"type": "string"}})
     properties = {
         "ratings": _strict({item: rating for items in RUBRIC.values() for item, *_ in items}),
-        "penalty": {"type": "integer", "minimum": 0, "maximum": MAX_PENALTY}, "penaltyReason": {"type": "string"},
         "critical": {"type": "integer", "minimum": 0}, "criticalEvidence": {"type": "string"},
         "issues": {"type": "array", "items": _issue()}, "notes": {"type": "string"},
     }

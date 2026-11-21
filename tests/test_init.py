@@ -77,7 +77,7 @@ class SeedTests(unittest.TestCase):
             done = subprocess.run([sys.executable, "-I", "-c", f"import sys; sys.path.insert(0, {SCRIPTS!r}); {code}"],
                                   env={**os.environ, "AGENT_LOOP_ROOT": root}, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertEqual(done.stdout.split(), ["85", "5"])
+            self.assertEqual(done.stdout.split(), ["85", "6"])
 
     def test_seed_policy_has_every_key_the_guard_reads(self):
         with open(os.path.join(init.TEMPLATES, "github", "auto-merge-policy.json"), encoding="utf-8") as file:

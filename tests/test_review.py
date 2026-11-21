@@ -183,53 +183,62 @@ class ReviewMaterialTests(unittest.TestCase):
 
 
 TEST = "Assets/UI/Tests/EditMode/FooTests.cs"
-SLICE = {"id": "s1", "files": ["Assets/A.cs", "Assets/UI/"], "complexity": "simple"}
+SLICE = {"id": "s1", "title": "첫 조각", "kind": "change", "files": ["Assets/A.cs", "Assets/UI/"], "complexity": "simple",
+         "acceptance": ["A를 한다", "B가 없다"], "depends_on": [], "retire": {TEST: "없앤 구조를 검사한다"}}
+ROWS = [("M", ["Assets/A.cs"]), ("A", ["Assets/A.cs.meta"]), ("A", ["Assets/UI/Panel/View.cs"]), ("M", [TEST])]
 
 
-class MachineCheckTests(unittest.TestCase):
-    def test_only_new_test_files_keep_the_existing_tests(self):
-        self.assertTrue(rv.tests_kept([("M", ["Assets/A.cs"]), ("A", [TEST])], None))
-        self.assertTrue(rv.tests_kept([("M", ["Assets/A.cs"])], None))
-        for status, paths in (("M", [TEST]), ("D", [TEST]), ("R", [TEST, "Assets/UI/Tests/EditMode/BarTests.cs"])):
-            self.assertIsNone(rv.tests_kept([(status, paths)], None), status)
+class MinimalReviewTests(unittest.TestCase):
+    def test_ordinary_slice_merges_on_machine_checks_without_a_reviewer(self):
+        machine = rv.machine_facts(ROWS, SLICE, [], [])
+        self.assertEqual((machine["review"], machine["criteria"]), ([], ["A를 한다", "B가 없다"]))
 
-    def test_changes_inside_the_declared_files_and_folders_are_in_scope(self):
-        rows = [("M", ["Assets/A.cs"]), ("A", ["Assets/A.cs.meta"]), ("A", ["Assets/UI/Panel/View.cs"]), ("M", [TEST])]
-        self.assertTrue(rv.declared_files(rows, SLICE))
-        self.assertIsNone(rv.declared_files(rows + [("M", ["Assets/B.cs"])], SLICE))
-        self.assertIsNone(rv.declared_files(rows + [("M", ["Assets/A.csv"])], SLICE), "접두어가 같은 다른 파일")
-        self.assertIsNone(rv.declared_files(rows, None), "조각을 모르면 확정하지 않는다")
+    def test_reviewer_is_called_only_where_a_late_catch_is_expensive(self):
+        self.assertIn("의존", rv.machine_facts(ROWS, SLICE, ["s2", "s3"], [])["review"][0])
+        self.assertIn("complex", rv.machine_facts(ROWS, {**SLICE, "complexity": "complex"}, [], [])["review"][0])
+        outside = rv.machine_facts(ROWS + [("M", ["Assets/B.cs"])], SLICE, [], [])["review"]
+        self.assertEqual(len(outside), 1)
+        self.assertIn("Assets/B.cs", outside[0])
+        self.assertEqual(rv.outside_declared(ROWS + [("M", ["Assets/A.csv"])], SLICE), ["Assets/A.csv"], "접두어가 같은 다른 파일")
+        self.assertTrue(rv.machine_facts(ROWS, None, [], [])["review"], "조각을 모르면 리뷰어가 PR 본문으로 본다")
 
-    def test_simple_slice_that_passes_the_machine_checks_calls_no_reviewer(self):
-        machine = rv.machine_facts([("M", ["Assets/A.cs"]), ("A", [TEST])], SLICE, [])
-        self.assertEqual(sorted(machine["passed"]), ["m2", "m3"])
-        self.assertEqual(machine["deferred"], ["m1", "m4"])
-        self.assertEqual(qg.open_checks(machine), [])
+    def test_minimal_prompt_lists_the_criteria_of_this_slice(self):
+        text = rv.prompt("minimal", "abc", "증거", "자료", rv.machine_facts(ROWS, SLICE, ["s2"], []))
+        self.assertIn("- c1: A를 한다", text)
+        self.assertIn("- c2: B가 없다", text)
+        self.assertIn("다른 조각이 의존한다(s2)", text)
 
-    def test_other_slices_leave_the_judgement_checks_to_the_reviewer(self):
-        rows = [("M", ["Assets/A.cs"]), ("A", [TEST])]
-        self.assertEqual(qg.open_checks(rv.machine_facts(rows, {**SLICE, "complexity": "medium"}, [])), ["m1", "m4"])
-        self.assertEqual(qg.open_checks(rv.machine_facts(rows, None, [])), ["m1", "m3", "m4"])
-        touched = rv.machine_facts([("M", [TEST])], SLICE, [])
-        self.assertEqual(qg.open_checks(touched), ["m1", "m2", "m4"], "기존 테스트를 고친 simple 조각은 미루지 않는다")
+    def state(self, tmp):
+        path = os.path.join(tmp, "demo.json")
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump({"loop_branch": "loop/demo", "slices": [SLICE, {**SLICE, "id": "s2", "depends_on": ["s1"]}]}, file)
+        return path
 
-    def test_minimal_prompt_asks_the_open_checks_and_names_the_settled_ones(self):
-        machine = rv.machine_facts([("M", ["Assets/A.cs"])], {**SLICE, "complexity": "medium"}, [])
-        text = rv.prompt("minimal", "abc", "증거", "자료", machine)
-        self.assertIn("- m1 수용 기준", text)
-        self.assertNotIn("- m2 테스트 보존", text)
-        self.assertIn("- m2: ", text)
-
-    def test_slice_is_found_in_the_state_file_by_its_branch(self):
+    def test_slice_and_the_slices_depending_on_it_come_from_the_state_file(self):
         import tempfile
-        state = {"loop_branch": "loop/demo", "slices": [SLICE]}
         with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "demo.json")
-            with open(path, "w", encoding="utf-8") as file:
-                json.dump(state, file)
-            self.assertEqual(rv.slice_of(path, "task/demo-s1"), SLICE)
-            self.assertIsNone(rv.slice_of(path, "task/demo-s9"))
-        self.assertIsNone(rv.slice_of(None, "task/demo-s1"))
+            path = self.state(tmp)
+            self.assertEqual(rv.slice_of(path, "task/demo-s1"), (SLICE, ["s2"]))
+            self.assertEqual(rv.slice_of(path, "task/demo-s9"), (None, []))
+        self.assertEqual(rv.slice_of(None, "task/demo-s1"), (None, []))
+
+    def test_detailed_material_carries_every_slice_criteria_and_retired_tests(self):
+        import tempfile
+        original = rv.CONFIG.pop("shape", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                text = "\n".join(rv.loop_parts(self.state(tmp), "origin/develop"))
+        finally:
+            if original is not None:
+                rv.CONFIG["shape"] = original
+        self.assertIn("#### s1 첫 조각 (change)", text)
+        self.assertIn("- B가 없다", text)
+        self.assertIn(f"- 물러난 테스트 {TEST}: 없앤 구조를 검사한다", text)
+
+    def test_detailed_prompt_asks_what_can_be_removed_first(self):
+        text = rv.prompt("detailed", "abc", "CI", "자료")
+        self.assertIn("뺄셈부터", text)
+        self.assertNotIn("뺄셈부터", rv.prompt("minimal", "abc", "CI", "자료", rv.machine_facts(ROWS, SLICE, ["s2"], [])))
 
 
 if __name__ == "__main__":

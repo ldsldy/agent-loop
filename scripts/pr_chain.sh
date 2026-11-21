@@ -39,7 +39,7 @@ VERDICT="$REV/ci-results/quality/${SHA:0:7}-minimal/verdict.json"
 mkdir -p "$MAIN/ci-results/quality" && cp -r "$REV/ci-results/quality/${SHA:0:7}-minimal" "$MAIN/ci-results/quality/" 2>/dev/null
 V=$(python -I -c "import json,sys;print(json.load(open(sys.argv[1],encoding='utf-8'))['verdict'])" "$VERDICT"); echo "minimal=$V"
 [ "$V" = pass ] || exit 0
-HOW=$(python -I -c "import json,sys;m=json.load(open(sys.argv[1],encoding='utf-8'))['machine'];print('기계 통과 '+('·'.join(m['passed']) or '없음')+(', 상세 리뷰로 미룸 '+'·'.join(m['deferred'])+'(simple 조각, 리뷰어 없음)' if m['deferred'] else ', 나머지는 리뷰어 pass'))" "$VERDICT")
+HOW=$(python -I -c "import json,sys;m=json.load(open(sys.argv[1],encoding='utf-8'))['machine'];print('수용 기준 대조 통과(리뷰한 이유: '+'; '.join(m['review'])+')' if m['review'] else '기계 검사만으로 머지(수용 기준 대조는 루프 끝 상세 리뷰)')" "$VERDICT")
 gh pr comment $PR -b "## 최소 리뷰: 통과 (${SHA:0:7})
 $HOW. 조각 검사: $CHECK(조각 PR은 CI 없음, 전체 테스트 근거는 루프 끝 기준 브랜치 PR의 CI). 결과 원본: \`ci-results/quality/${SHA:0:7}-minimal/\`" >/dev/null
 fi

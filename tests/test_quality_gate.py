@@ -15,7 +15,7 @@ def review(grade=4, gate="pass", **overrides):
         "ratings": {item: {"quant": grade, "qual": grade, "evidence": "f.cs:1"}
                     for group in qg.RUBRIC.values() for item, *_ in group},
         "gates": {g: {"status": gate, "evidence": "CI run 1"} for g, *_ in qg.GATES},
-        "critical": 0, "criticalEvidence": "검토함", "penalty": 0,
+        "critical": 0, "criticalEvidence": "검토함",
     }
     data.update(overrides)
     return data
@@ -53,10 +53,6 @@ class JudgeTests(unittest.TestCase):
     def test_failed_gate_or_critical_blocks_regardless_of_score(self):
         self.assertEqual(qg.judge(review(gate="fail"))["verdict"], "blocked")
         self.assertEqual(qg.judge(review(critical=1))["verdict"], "blocked")
-
-    def test_penalty_lowers_a_and_needs_a_reason(self):
-        self.assertEqual(qg.judge(review(penalty=5, penaltyReason="연쇄 래퍼"))["a"]["score"], 95)
-        self.assertEqual(qg.judge(review(penalty=5))["verdict"], "incomplete")
 
     def test_other_schema_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -119,50 +115,47 @@ class RubricTests(unittest.TestCase):
         self.assertIn("gates", qg.review_schema()["properties"])
 
 
+CRITERIA = ["A를 한다", "B가 없다"]
+
+
 def minimal(status="pass", sha="abc", **checks):
     data = {"schema": qg.SCHEMA, "reviewer": "claude", "git_sha": sha,
-            "checks": {item: {"status": status, "evidence": "x"} for item, *_ in qg.MINIMAL_CHECKS}}
+            "checks": {item: {"status": status, "evidence": "x"} for item in qg.criteria_ids(len(CRITERIA))}}
     for item, value in checks.items():
         data["checks"][item] = {"status": value, "evidence": "x"}
     return data
 
 
-OK_MACHINE = {"hard_fails": []}
+REVIEWED = {"hard_fails": [], "review": ["다른 조각이 의존한다(s2)"], "criteria": CRITERIA}
+MACHINE_ONLY = {"hard_fails": [], "review": [], "criteria": CRITERIA}
 
 
 class JudgeMinimalTests(unittest.TestCase):
-    def test_all_checks_pass_without_ci(self):
-        self.assertEqual(qg.judge_minimal([minimal()], "abc", OK_MACHINE)["verdict"], "pass")
-
-    def test_ci_result_is_not_part_of_the_minimal_verdict(self):
+    def test_every_acceptance_criterion_passing_passes_without_ci(self):
+        self.assertEqual(qg.judge_minimal([minimal()], "abc", REVIEWED)["verdict"], "pass")
         # 조각 PR은 CI를 돌리지 않는다(2026-11-19). 실패한 CI 값이 들어와도 판정에 쓰지 않는다.
-        self.assertEqual(qg.judge_minimal([minimal()], "abc", {"ci": "failure", "hard_fails": []})["verdict"], "pass")
+        self.assertEqual(qg.judge_minimal([minimal()], "abc", {**REVIEWED, "ci": "failure"})["verdict"], "pass")
 
-    def test_any_failed_check_or_machine_fact_fails(self):
-        self.assertEqual(qg.judge_minimal([minimal(m2="fail")], "abc", OK_MACHINE)["verdict"], "fail")
-        self.assertEqual(qg.judge_minimal([minimal()], "abc", {"hard_fails": ["순환"]})["verdict"], "fail")
+    def test_any_failed_criterion_or_machine_fact_fails_and_names_the_criterion(self):
+        verdict = qg.judge_minimal([minimal(c2="fail")], "abc", REVIEWED)
+        self.assertEqual(verdict["verdict"], "fail")
+        self.assertIn("B가 없다", verdict["failed"][0])
+        self.assertEqual(qg.judge_minimal([minimal()], "abc", {**REVIEWED, "hard_fails": ["순환"]})["verdict"], "fail")
 
-    def test_unknown_check_missing_reviewer_or_other_commit_is_incomplete(self):
-        self.assertEqual(qg.judge_minimal([minimal(m1="unknown")], "abc", OK_MACHINE)["verdict"], "incomplete")
-        self.assertEqual(qg.judge_minimal([], "abc", OK_MACHINE)["verdict"], "incomplete")
-        self.assertEqual(qg.judge_minimal([minimal(sha="old")], "abc", OK_MACHINE)["verdict"], "incomplete")
+    def test_unknown_criterion_missing_reviewer_or_other_commit_is_incomplete(self):
+        self.assertEqual(qg.judge_minimal([minimal(c1="unknown")], "abc", REVIEWED)["verdict"], "incomplete")
+        self.assertEqual(qg.judge_minimal([], "abc", REVIEWED)["verdict"], "incomplete")
+        self.assertEqual(qg.judge_minimal([minimal(sha="old")], "abc", REVIEWED)["verdict"], "incomplete")
 
-    def test_checks_the_machine_settled_need_no_reviewer_answer(self):
-        machine = {"hard_fails": [], "passed": {"m2": "x", "m3": "x"}}
-        self.assertEqual(qg.open_checks(machine), ["m1", "m4"])
-        self.assertEqual(qg.judge_minimal([minimal(m2="unknown", m3="unknown")], "abc", machine)["verdict"], "pass")
-        self.assertEqual(qg.judge_minimal([minimal(m4="fail")], "abc", machine)["verdict"], "fail")
+    def test_slice_with_no_reason_to_review_merges_on_machine_checks_alone(self):
+        self.assertEqual(qg.judge_minimal([], "abc", MACHINE_ONLY)["verdict"], "pass")
+        self.assertEqual(qg.judge_minimal([], "abc", {**MACHINE_ONLY, "hard_fails": ["순환"]})["verdict"], "fail")
 
-    def test_when_everything_is_settled_or_deferred_no_reviewer_is_required(self):
-        machine = {"hard_fails": [], "passed": {"m2": "x", "m3": "x"}, "deferred": ["m1", "m4"]}
-        self.assertEqual(qg.judge_minimal([], "abc", machine)["verdict"], "pass")
-        self.assertEqual(qg.judge_minimal([], "abc", {**machine, "hard_fails": ["순환"]})["verdict"], "fail")
-
-    def test_minimal_schema_is_strict_and_asks_only_the_open_checks(self):
-        schema = qg.minimal_schema(["m1", "m4"])
+    def test_minimal_schema_is_strict_and_asks_one_answer_per_criterion(self):
+        schema = qg.minimal_schema(2)
         self.assertFalse(schema["additionalProperties"])
-        self.assertEqual(schema["properties"]["checks"]["required"], ["m1", "m4"])
-        self.assertNotIn("m2 ", qg.minimal_text(["m1", "m4"]))
+        self.assertEqual(schema["properties"]["checks"]["required"], ["c1", "c2"])
+        self.assertIn("- c2: B가 없다", qg.minimal_text(CRITERIA))
 
 
 if __name__ == "__main__":
