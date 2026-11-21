@@ -41,6 +41,8 @@ class SliceErrorTests(unittest.TestCase):
         self.assertTrue(u.slice_errors([{**piece("s1"), "retire": {"b.cs": " "}}]))
         self.assertTrue(u.slice_errors([{**piece("s1"), "guards": ["a.cs"], "retire": {"a.cs": "옛 구조"}}]))
         self.assertTrue(u.slice_errors([{**piece("s1"), "retire": ["b.cs"]}]))
+        self.assertEqual(u.slice_errors([{**piece("s1"), "allow": {"ILink": "외부 경계: 네트워크"}}]), [])
+        self.assertTrue(u.slice_errors([{**piece("s1"), "allow": {"ILink": ""}}]))
         self.assertTrue(u.slice_errors([piece("s1"), piece("s1")]))
         self.assertTrue(u.slice_errors([piece("s1", ["s9"])]))
         self.assertIn("의존이 순환한다", u.slice_errors([piece("a", ["b"]), piece("b", ["a"])]))

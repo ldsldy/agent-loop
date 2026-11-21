@@ -353,6 +353,35 @@ class ContractTests(unittest.TestCase):
             self.assertEqual((code, len(calls)), (1, 1))
             self.assertIn("지킴이", text)
 
+    def test_shape_rules_fail_before_unity_and_an_allowed_exception_is_recorded(self):
+        shape_config = {"roots": ["Assets"], "max_depth": 3}
+        with slice_repo() as (root, _):
+            plan_slice(root, kind="keep", guards=[], retire={}, files=["Assets/ILink.cs", "Assets/Link.cs"])
+            write(root, "Assets/ILink.cs", "public interface ILink { void Send(); }\n")
+            write(root, "Assets/Link.cs", "public sealed class Link : ILink { public void Send() { } }\n")
+            calls = []
+            code, text = quiet(sc.check, root, is_test, fake_unity(calls=calls), shape_config=shape_config)
+            self.assertEqual((code, calls), (1, []))
+            self.assertIn("[인터페이스] ILink", text)
+            plan_slice(root, kind="keep", guards=[], retire={}, files=["Assets/ILink.cs", "Assets/Link.cs"], allow={"ILink": "외부 경계: 네트워크"})
+            code, text = quiet(sc.check, root, is_test, fake_unity(calls=calls), shape_config=shape_config)
+            self.assertEqual(code, 0, text)
+            self.assertIn("허용된 모양 예외: ILink", text)
+
+    def test_changing_the_guid_of_an_existing_asset_fails(self):
+        with slice_repo() as (root, run):
+            write(root, "Assets/A.cs.meta", "fileFormatVersion: 2\nguid: aaaa1111\n")
+            run("add", "-A")
+            run("commit", "-qm", "meta")
+            run("update-ref", "refs/remotes/origin/loop/demo", "HEAD")
+            write(root, "Assets/A.cs.meta", "fileFormatVersion: 2\nguid: bbbb2222\n")
+            calls = []
+            code, text = quiet(sc.check, root, is_test, fake_unity(calls=calls))
+            self.assertEqual((code, calls), (1, []))
+            self.assertIn("GUID", text)
+            write(root, "Assets/A.cs.meta", "fileFormatVersion: 2\nguid: aaaa1111\nMonoImporter:\n")
+            self.assertEqual(quiet(sc.check, root, is_test, fake_unity(calls=calls))[0], 0, "GUID가 그대로면 다른 줄은 바뀌어도 된다")
+
     def test_after_the_budget_of_failures_it_stops_until_told_to_go_again(self):
         with slice_repo() as (root, _):
             write(root, NEW_TEST, TEST_SOURCE)

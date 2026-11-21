@@ -8,6 +8,7 @@
 - 컴파일되고, 이 조각이 만들거나 고친 테스트와 지킴이 테스트(guards)가 통과한다. 실행 중 새 파일이 생기지 않는다.
 - 기존 테스트는 물러나는 테스트(retire)에 적힌 것만 고치거나 지운다. 지킴이는 건드리지 않는다.
 - 바꾸는 조각(kind=change)은 구현 전 코드에 테스트만 얹으면 실패하거나 컴파일되지 않는다(빨강에서 초록).
+- 새 파일·타입이 모양 규칙(shape.py: 파일·타입·상속·폴더)을 지킨다. 이미 있던 에셋의 GUID를 바꾸지 않는다.
 - 같은 조각에서 BUDGET번 실패하면 더 돌리지 않는다. 판정을 받은 뒤 --again으로 다시 연다.
 
 기록은 <git 공용 폴더>/agent-loop/slice-check/<트리 해시>.json 이다(worktree들이 함께 본다).
@@ -23,6 +24,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ensure_runner  # noqa: E402
+import shape  # noqa: E402
 import unity_tests  # noqa: E402
 
 TASK_PREFIX = "task/"
@@ -188,7 +190,20 @@ def prove(root, piece, fork, tree, rows, is_test, runner, marker):
     return True, lines
 
 
-def check(root, is_test, runner=subprocess.run, again=False):
+def changed_guids(root, fork, rows):
+    """이미 있던 에셋의 .meta에서 GUID가 바뀐 것. GUID가 바뀌면 그 에셋을 가리키던 참조가 끊긴다."""
+    def guid(text):
+        found = re.search(r"^guid:\s*(\w+)", text, re.M)
+        return found.group(1) if found else None
+    changed = []
+    for path in (path for status, path in rows if status == "M" and path.endswith(".meta")):
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as file:
+            if guid(git("show", f"{fork}:{path}", cwd=root)) != guid(file.read()):
+                changed.append(path)
+    return changed
+
+
+def check(root, is_test, runner=subprocess.run, again=False, shape_config=None):
     branch = git("branch", "--show-current", cwd=root)
     base = loop_base(root, branch)
     if not base:
@@ -215,9 +230,19 @@ def check(root, is_test, runner=subprocess.run, again=False):
     piece = slice_of(root, branch, base)
     fork, rows = changed(root, base, tree)
     lines = contract_errors(root, piece, rows, is_test)
+    moved = changed_guids(root, fork, rows)
+    if moved:
+        lines.append(f"이미 있던 에셋의 GUID가 바뀌었다(참조가 끊긴다). .meta를 되돌린다: {', '.join(moved)}")
+    excused = []
+    if shape_config:  # 새 파일·타입의 모양 규칙(shape.py). Unity를 띄우기 전에 본다
+        broken, excused = shape.slice_report(root, fork, rows, piece, shape_config, is_test)
+        if broken:
+            lines += [f"모양 규칙 위반 {len(broken)}건. 고친다. 정당한 예외면 멈추고 조정 세션에 조각의 allow에 이유를 더해 달라고 한다:"] + broken
     ok = not lines
     if ok:
         ok, lines = prove(root, piece, fork, tree, rows, is_test, runner, marker)
+        if ok and excused:
+            lines.append(f"허용된 모양 예외: {', '.join(excused)}")
     print("\n".join(lines))
     if not ok:
         tries.append(lines[:5])
@@ -280,7 +305,7 @@ def main(argv):
             return guard(json.load(sys.stdin))
         except ValueError:
             return 0
-    from loopconfig import ROOT
+    from loopconfig import CONFIG, ROOT
     from scope import is_test
     if argv[:1] == ["has"] and len(argv) == 2:
         return has(ROOT, argv[1])
@@ -288,7 +313,7 @@ def main(argv):
         sys.exit("사용법: python -I slice_check.py [--again | has <커밋> | guard]")
     if runner_configured(ROOT) and ensure_runner.local_busy():
         sys.exit(CI_BUSY)
-    return check(ROOT, is_test, again=bool(argv))
+    return check(ROOT, is_test, again=bool(argv), shape_config=CONFIG.get("shape"))
 
 
 if __name__ == "__main__":

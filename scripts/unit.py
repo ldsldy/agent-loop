@@ -13,6 +13,7 @@ COMPLEXITY = ("simple", "medium", "complex")
 # 조각의 증명 계약(slice_check.py가 확인한다):
 # kind    change = 행동을 바꾼다(구현 전에 실패하고 구현 뒤에 통과하는 테스트가 있어야 한다), keep = 행동을 지킨다
 # guards  이 조각 뒤에도 고치지 않은 채 통과해야 하는 기존 테스트 파일
+# allow   (선택) 모양 규칙의 예외 → 이유. 대상은 타입 이름, 타입.멤버, 파일 경로, 폴더 이름(shape.py). 구현이 하나뿐인 인터페이스가 외부 경계일 때처럼 쓴다
 # retire  이 조각이 고쳐 쓰거나 지워도 되는 기존 테스트 파일 → 이유(옛 구조에 묶임, spec이 바꾼 동작). 여기 없는 기존 테스트는 못 건드린다
 KINDS = ("change", "keep")
 SLICE_FIELDS = ("id", "title", "issues", "acceptance", "files", "complexity", "depends_on", "kind", "guards", "retire")
@@ -53,6 +54,8 @@ def slice_errors(slices, existing=()):
             errors.append(f"{piece.get('id')}: guards는 목록, retire는 {{테스트 파일: 이유}}")
         elif not all(str(why).strip() for why in retire.values()):
             errors.append(f"{piece.get('id')}: retire의 테스트마다 물러나는 이유를 적는다")
+        elif not isinstance(piece.get("allow", {}), dict) or not all(str(why).strip() for why in piece.get("allow", {}).values()):
+            errors.append(f"{piece.get('id')}: allow는 {{대상: 이유}}이고 이유를 비우지 않는다")
         elif set(guards) & set(retire):
             errors.append(f"{piece.get('id')}: 같은 테스트가 guards와 retire에 함께 있다 {sorted(set(guards) & set(retire))}")
     duplicates = {i for i in ids if ids.count(i) > 1} | (set(ids) & known)

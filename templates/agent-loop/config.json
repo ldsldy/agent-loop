@@ -9,5 +9,7 @@
     "results_artifact": "test-results",
     "result_files": ["test-results.xml"]
   },
-  "evidence": []
+  "evidence": [],
+  "shape": {"roots": ["Assets"], "max_depth": 3, "folder_names": []},
+  "editor_globs": ["*/Editor/*"]
 }
