@@ -34,11 +34,13 @@ python -I "${CLAUDE_PLUGIN_ROOT}/scripts/init.py" --update   # 플러그인 관�
 | `context_files` | 리뷰 자료에 싣는 저장소 규칙 문서(설계 원칙·테스트 규칙이 있는 곳) |
 | `ci.results_artifact`, `ci.result_files` | CI가 올리는 테스트 결과 아티팩트 이름과 그 안의 NUnit3 XML 파일 이름 |
 | `evidence` | 리뷰 자료에 붙일 프로젝트 전용 검사. `{"title", "cmd"}`, 인자의 `{base}`·`{sha}`·`{tree}`가 바뀐다. JSON 출력의 `hard_fails`는 최소 리뷰를 실패시킨다 |
+| `shape` | 모양 규칙 설정 `{"roots": [코드 폴더], "max_depth": 3, "folder_names": [쓸 수 있는 폴더 이름]}`. `roots` 아래의 테스트 아닌 `.cs`에 건다. `folder_names`를 비우면 폴더 이름은 보지 않는다. 폴더는 영역 아래 역할로 짜고 이름 목록을 사용자와 정한다 |
+| `editor_globs` | 에디터 코드 글롭. 상세 리뷰가 수용 기준대로 됐는지만 본다 |
 | `loop_branch_ruleset` (선택) | 루프 브랜치 생성을 막는 규칙 세트 `{"name", "id"}`. 시작 때 잠깐 끈다 |
 | `runner.task` (선택) | 이 PC의 self-hosted 실행기를 켜는 Windows 로그온 작업. 있으면 `gh pr create` 뒤 훅이 실행기를 확인하고, 실행기가 작업 중일 때는 조각 검사와 Unity batchmode 명령을 막는다 |
 
 `models.json`(역할별 모델), `rubric.json`(평가표)은 씨앗 그대로 써도 된다. 평가표 그룹별 배점 합은 100이어야 한다. 프로젝트 성격에 맞게 항목 설명을 고친다.
-최소 리뷰 항목의 `auto`(`tests_kept`, `declared_files`)는 기계가 통과를 확정하는 판정이다. 빼면 그 항목을 리뷰어가 본다.
+최소 리뷰는 평가표가 없다. 조각의 수용 기준이 곧 채점표다. 구조 그룹은 "지금 필요한 만큼"과 "파악 비용"을 보도록 짜여 있다. 확장성을 보상하는 항목을 넣지 않는다.
 `.github/auto-merge-policy.json`의 `deny`·`allow`·`test_glob`을 이 저장소 경로로 맞춘다.
 
 다 바꾸면 `python -I "${CLAUDE_PLUGIN_ROOT}/scripts/quality_gate.py" --rubric`이 평가표를 출력해야 한다(설정을 읽지 못하면 이유를 말하고 멈춘다).
