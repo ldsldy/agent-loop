@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import slice_check  # noqa: E402
 import unit as units  # noqa: E402
 from loopconfig import ROOT  # noqa: E402
 from quality_gate import MAX_IMPROVEMENTS  # noqa: E402
@@ -147,7 +148,8 @@ def cleanup(dry_run):
 
 
 def unit_path(name):
-    return os.path.join(ROOT, "ci-results", "loop", f"{name}.json")
+    # git 공용 폴더에 둔다. 조정 세션과 구현 세션이 다른 worktree에 있어도 같은 상태(조각의 증명 계약)를 읽는다.
+    return slice_check.state_path(ROOT, name)
 
 
 def load_unit(name):

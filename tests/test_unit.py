@@ -11,7 +11,7 @@ import unit as u  # noqa: E402
 
 def piece(piece_id, depends_on=(), complexity="simple"):
     return {"id": piece_id, "title": piece_id, "issues": [114], "acceptance": ["a"], "files": ["f"],
-            "complexity": complexity, "depends_on": list(depends_on)}
+            "complexity": complexity, "depends_on": list(depends_on), "kind": "keep", "guards": [], "retire": {}}
 
 
 def unit_with(*pieces):
@@ -34,6 +34,13 @@ class SliceErrorTests(unittest.TestCase):
     def test_missing_field_bad_complexity_duplicate_unknown_dep_and_cycle(self):
         self.assertTrue(u.slice_errors([{"id": "s1"}]))
         self.assertTrue(u.slice_errors([piece("s1", complexity="huge")]))
+
+    def test_proof_contract_needs_a_kind_reasons_for_retired_tests_and_no_test_on_both_lists(self):
+        self.assertEqual(u.slice_errors([{**piece("s1"), "kind": "change", "guards": ["a.cs"], "retire": {"b.cs": "옛 구조"}}]), [])
+        self.assertTrue(u.slice_errors([{**piece("s1"), "kind": "refactor"}]))
+        self.assertTrue(u.slice_errors([{**piece("s1"), "retire": {"b.cs": " "}}]))
+        self.assertTrue(u.slice_errors([{**piece("s1"), "guards": ["a.cs"], "retire": {"a.cs": "옛 구조"}}]))
+        self.assertTrue(u.slice_errors([{**piece("s1"), "retire": ["b.cs"]}]))
         self.assertTrue(u.slice_errors([piece("s1"), piece("s1")]))
         self.assertTrue(u.slice_errors([piece("s1", ["s9"])]))
         self.assertIn("의존이 순환한다", u.slice_errors([piece("a", ["b"]), piece("b", ["a"])]))

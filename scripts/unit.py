@@ -1,6 +1,6 @@
 """큰 단위(마일스톤 하나 = 루프 브랜치 하나)의 상태와 다음 행동 규칙. GitHub를 부르지 않는다(테스트 대상).
 
-상태는 ci-results/loop/<루프 이름>.json에 둔다. 조각의 진행(PR 열림·머지)은 저장하지 않고 GitHub의 PR에서 읽는다.
+상태는 <git 공용 폴더>/agent-loop/loop/<루프 이름>.json에 둔다(worktree들이 함께 본다). 조각의 진행(PR 열림·머지)은 저장하지 않고 GitHub의 PR에서 읽는다.
 조각 브랜치 이름은 task/<루프 이름>-<조각 id>로 정해져 있어 PR을 이름으로 찾는다.
 """
 import os
@@ -10,7 +10,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from loopconfig import CONFIG, MODELS, effort  # noqa: E402
 
 COMPLEXITY = ("simple", "medium", "complex")
-SLICE_FIELDS = ("id", "title", "issues", "acceptance", "files", "complexity", "depends_on")
+# 조각의 증명 계약(slice_check.py가 확인한다):
+# kind    change = 행동을 바꾼다(구현 전에 실패하고 구현 뒤에 통과하는 테스트가 있어야 한다), keep = 행동을 지킨다
+# guards  이 조각 뒤에도 고치지 않은 채 통과해야 하는 기존 테스트 파일
+# retire  이 조각이 고쳐 쓰거나 지워도 되는 기존 테스트 파일 → 이유(옛 구조에 묶임, spec이 바꾼 동작). 여기 없는 기존 테스트는 못 건드린다
+KINDS = ("change", "keep")
+SLICE_FIELDS = ("id", "title", "issues", "acceptance", "files", "complexity", "depends_on", "kind", "guards", "retire")
 DETAILED = ("pending", "failed", "passed")
 LOOP_PREFIX = "loop/"
 TASK_PREFIX = "task/"
@@ -41,6 +46,15 @@ def slice_errors(slices, existing=()):
             errors.append(f"{piece.get('id')}: 필드 없음 {missing}")
         if piece.get("complexity") not in COMPLEXITY:
             errors.append(f"{piece.get('id')}: complexity는 {COMPLEXITY} 중 하나")
+        if piece.get("kind") not in KINDS:
+            errors.append(f"{piece.get('id')}: kind는 {KINDS} 중 하나")
+        guards, retire = piece.get("guards", []), piece.get("retire", {})
+        if not isinstance(guards, list) or not isinstance(retire, dict):
+            errors.append(f"{piece.get('id')}: guards는 목록, retire는 {{테스트 파일: 이유}}")
+        elif not all(str(why).strip() for why in retire.values()):
+            errors.append(f"{piece.get('id')}: retire의 테스트마다 물러나는 이유를 적는다")
+        elif set(guards) & set(retire):
+            errors.append(f"{piece.get('id')}: 같은 테스트가 guards와 retire에 함께 있다 {sorted(set(guards) & set(retire))}")
     duplicates = {i for i in ids if ids.count(i) > 1} | (set(ids) & known)
     if duplicates:
         errors.append(f"중복 id {sorted(duplicates)}")
@@ -114,7 +128,9 @@ def next_actions(unit, prs, live_branches, max_improvements):
     elif detailed == "failed":
         actions.append({"action": "stop", "why": f"개선 {max_improvements}회 뒤에도 상세 리뷰 미달. 사용자에게 보고한다"})
     else:
-        actions.append({"action": "notify-user", "why": f"상세 리뷰 통과. 사용자가 {CONFIG['base_branch']}에 머지한다"})
+        retired = {path: why for piece in unit["slices"] for path, why in piece.get("retire", {}).items()}
+        actions.append({"action": "notify-user", "why": f"상세 리뷰 통과. 사용자가 {CONFIG['base_branch']}에 머지한다. 물러난 테스트(retired)를 이유와 함께 보고한다",
+                        "retired": retired})
     return actions
 
 

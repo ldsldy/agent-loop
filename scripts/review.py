@@ -1,7 +1,7 @@
 """품질 리뷰 실행기. 리뷰어는 같은 커밋·같은 자료를 받고, 서로의 결과를 보지 않고 동시에 채점한다.
 
     # 최소 리뷰: 조각 PR마다. 기계가 통과로 확정하지 못한 항목만 리뷰어 하나가 diff를 보고 통과/실패를 낸다(simple 조각은 기계 판정만).
-    python -I review.py --level minimal --base origin/loop/<이름> --pr <번호> [--unit ci-results/loop/<이름>.json]
+    python -I review.py --level minimal --base origin/loop/<이름> --pr <번호> [--unit <상태 파일>]
     # 상세 리뷰: 큰 단위(루프 브랜치)가 끝나 루프 → 기준 브랜치 PR을 열었을 때. 그 PR 커밋을 체크아웃하고 그 PR의 CI로.
     python -I review.py --level detailed --base origin/<기준 브랜치> --ci-run <run id> --spec <spec 이슈 번호...>
 

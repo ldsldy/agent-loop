@@ -33,7 +33,7 @@ if [ "$ONLY" = true ]; then
 테스트 파일만 바뀌어 리뷰하지 않는다(loop-review 스킬 \"건너뛰는 변경\"). 조각 검사: $CHECK. 전체 테스트 근거는 루프 끝 기준 브랜치 PR의 CI." >/dev/null
 else
 # 상태 파일의 조각(files·complexity)으로 기계 판정을 한다. 기계가 다 정하면 리뷰어를 부르지 않는다.
-STATE="$MAIN/ci-results/loop/$U.json"; [ -f "$STATE" ] || STATE=
+STATE="$(git rev-parse --path-format=absolute --git-common-dir)/agent-loop/loop/$U.json"; [ -f "$STATE" ] || STATE=
 ( cd "$REV" && python -I "$HERE/review.py" --level minimal --base origin/$L --pr $PR ${STATE:+--unit "$STATE"} 2>&1 | tail -4 )
 VERDICT="$REV/ci-results/quality/${SHA:0:7}-minimal/verdict.json"
 mkdir -p "$MAIN/ci-results/quality" && cp -r "$REV/ci-results/quality/${SHA:0:7}-minimal" "$MAIN/ci-results/quality/" 2>/dev/null

@@ -11,7 +11,7 @@ description: 루프의 품질 리뷰 절차. 조각 검사, 조각 PR의 최소 
 
 | 단계 | 언제 | 누가 | 통과 |
 | --- | --- | --- | --- |
-| **조각 검사** | push 전, 구현 worktree | `slice_check.py`(Unity batchmode) | 컴파일 오류 없음, 이 조각이 만들거나 고친 테스트 통과, 실행 중 새 파일 없음 |
+| **조각 검사** | push 전, 구현 worktree | `slice_check.py`(Unity batchmode) | 조각의 증명 계약: 컴파일, 바뀐 테스트와 지킴이 통과, 물러나는 테스트만 수정, 바꾸는 조각은 빨강에서 초록, 실행 중 새 파일 없음 |
 | **최소 리뷰** | 조각 PR마다(CI 없음) | 기계 판정, 남은 항목만 `review.minimal` 리뷰어 하나 | 최소 리뷰 항목 pass, 증거 명령 `hard_fails` 없음 |
 | **상세 리뷰** | 조각이 전부 머지된 뒤 | `review.detailed` 리뷰어 전원 | 리뷰어마다 그룹별 `pass_score` 이상, 치명적 결함 0건, 게이트 통과 |
 
@@ -21,15 +21,17 @@ description: 루프의 품질 리뷰 절차. 조각 검사, 조각 PR의 최소 
 python -I "$L/slice_check.py"      # task/<루프>-<조각> 브랜치의 worktree에서
 ```
 
-루프 브랜치에서 갈라진 뒤 바뀐 테스트 파일의 fixture만 골라 EditMode·PlayMode로 돌린다. 테스트 파일이 안 바뀌었으면 컴파일만 확인한다.
-통과하면 작업 트리 해시로 기록을 남긴다. 검사한 그대로 전부 커밋해야 PR 커밋과 맞는다. 파일을 더 바꾸면 다시 돌린다.
+조각의 증명 계약(`loop` 스킬 "증명 계약")을 확인한다. 루프 브랜치에서 갈라진 뒤 바뀐 테스트 파일과 지킴이(`guards`)의 fixture만 골라 EditMode·PlayMode로 돌린다.
+돌릴 테스트가 없으면 컴파일만 확인한다. 기존 테스트는 `retire`에 적힌 것만 고치거나 지울 수 있다.
+바꾸는 조각(`kind: change`)은 구현 전 코드에 이 조각의 테스트만 얹어 한 번 더 돌린다. 거기서 실패하거나 컴파일되지 않아야 통과다. 끝나면 작업 트리를 되돌린다.
+같은 조각에서 3번 실패하면 더 돌지 않는다(`--again`으로 다시 연다). 통과하면 작업 트리 해시로 기록을 남긴다. 검사한 그대로 전부 커밋해야 PR 커밋과 맞는다. 파일을 더 바꾸면 다시 돌린다.
 Unity가 실행 중 고친 추적 파일은 검사 전 내용으로 되돌리고, 새로 생긴 파일(커밋에서 빠진 `.meta` 등)은 실패로 알린다.
 이 PC의 CI 실행기가 작업 중이면 돌리지 않는다. 기록이 없는 트리는 훅이 `git push`를 막고 `pr_chain.sh`가 리뷰·머지를 하지 않는다.
 
 ## 최소 리뷰
 
 ```bash
-python -I "$L/review.py" --level minimal --base origin/loop/<이름> --pr <번호> --unit ci-results/loop/<이름>.json
+python -I "$L/review.py" --level minimal --base origin/loop/<이름> --pr <번호> --unit <상태 파일>
 ```
 
 PR 브랜치 최신 커밋을 체크아웃하고 돌린다. 보통은 `pr_chain.sh`가 전용 worktree(`.claude/worktrees/review`)에서 돌린다.

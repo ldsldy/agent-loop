@@ -1,6 +1,7 @@
 """조각 검사와 Unity 테스트 고르기·판정 자체 검사: python -I tests/test_slice_check.py"""
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -42,20 +43,40 @@ def write(root, path, text):
         file.write(text)
 
 
-def fake_unity(results=PASSED, code=0, log="", calls=None, touch=None, rewrite=None):
-    """Unity 대신 도는 실행기. 명령이 가리키는 결과·로그 파일을 쓰고 종료 코드를 돌려준다."""
+def fake_unity(results=PASSED, code=0, log="", calls=None, touch=None, rewrite=None, then=None, seen=None):
+    """Unity 대신 도는 실행기. 명령이 가리키는 결과·로그 파일을 쓰고 종료 코드를 돌려준다.
+    then은 두 번째 실행부터 쓸 (결과, 종료 코드)다. seen은 실행 때마다 작업 트리를 들여다보는 함수다."""
+    count = [0]
+
     def runner(cmd):
+        count[0] += 1
+        text, exit_code = (results, code) if count[0] == 1 or then is None else then
         if calls is not None:
             calls.append(cmd)
+        if seen is not None:
+            seen(cmd[cmd.index("-projectPath") + 1])
         with open(cmd[cmd.index("-logFile") + 1], "w", encoding="utf-8") as file:
             file.write(log)
-        if "-testResults" in cmd and results is not None:
+        if "-testResults" in cmd and text is not None:
             with open(cmd[cmd.index("-testResults") + 1], "w", encoding="utf-8") as file:
-                file.write(results)
+                file.write(text)
         for path in filter(None, (touch, rewrite)):
             write(cmd[cmd.index("-projectPath") + 1], path, "made by unity\n")
-        return types.SimpleNamespace(returncode=code)
+        return types.SimpleNamespace(returncode=exit_code)
     return runner
+
+
+def plan_slice(root, **contract):
+    """상태 파일에 이 조각(task/demo-s1)의 증명 계약을 적는다."""
+    path = sc.state_path(root, "demo")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump({"loop_branch": "loop/demo", "slices": [{"id": "s1", **contract}]}, file)
+
+
+def read(root, path):
+    with open(os.path.join(root, path), encoding="utf-8") as file:
+        return file.read()
 
 
 @contextlib.contextmanager
@@ -113,27 +134,27 @@ class JudgingTests(unittest.TestCase):
             return ut.judge(mode, code, *paths)
 
     def test_all_passed(self):
-        self.assertEqual(self.judged("EditMode", 0, PASSED), (True, ["EditMode 통과 2/2"]))
+        self.assertEqual(self.judged("EditMode", 0, PASSED), (ut.PASS, ["EditMode 통과 2/2"]))
 
     def test_failed_case_is_named_with_the_first_line_of_its_message(self):
-        ok, lines = self.judged("EditMode", 2, FAILED)
-        self.assertFalse(ok)
+        status, lines = self.judged("EditMode", 2, FAILED)
+        self.assertEqual(status, ut.FAIL)
         self.assertEqual(lines[1], "- FaultTrain.Tests.FooTests.Works: Expected 1")
 
     def test_filter_matching_no_test_is_a_failure(self):
-        self.assertFalse(self.judged("EditMode", 0, EMPTY)[0])
+        self.assertEqual(self.judged("EditMode", 0, EMPTY)[0], ut.UNKNOWN)
 
     def test_missing_results_is_a_failure(self):
-        self.assertFalse(self.judged("PlayMode", 1)[0])
+        self.assertEqual(self.judged("PlayMode", 1)[0], ut.UNKNOWN)
 
     def test_compile_error_in_the_log_fails_and_is_listed_once(self):
         log = "Assets/A.cs(1,1): error CS1002: ; expected\nnoise\nAssets/A.cs(1,1): error CS1002: ; expected\n"
-        ok, lines = self.judged(None, 0, log=log)
-        self.assertFalse(ok)
+        status, lines = self.judged(None, 0, log=log)
+        self.assertEqual(status, ut.COMPILE)
         self.assertEqual(lines, ["컴파일: 컴파일 오류 1건", "Assets/A.cs(1,1): error CS1002: ; expected"])
 
     def test_compile_only_passes_on_clean_exit(self):
-        self.assertEqual(self.judged(None, 0), (True, ["컴파일 통과"]))
+        self.assertEqual(self.judged(None, 0), (ut.PASS, ["컴파일 통과"]))
 
 
 class TreeTests(unittest.TestCase):
@@ -236,6 +257,129 @@ class CheckTests(unittest.TestCase):
         with slice_repo("fix/x") as (root, _):
             with self.assertRaises(SystemExit):
                 quiet(sc.check, root, is_test, fake_unity())
+
+
+OLD_TEST = "Assets/Tests/EditMode/OldTests.cs"
+NEW_TEST = "Assets/Tests/EditMode/FooTests.cs"
+NEW_CODE = "Assets/New.cs"
+
+
+class ContractTests(unittest.TestCase):
+    """조각의 증명 계약(kind·guards·retire)과 멈춤 예산."""
+
+    def change_slice(self, root):
+        plan_slice(root, kind="change", guards=[], retire={})
+        write(root, NEW_TEST, TEST_SOURCE)
+        write(root, NEW_CODE, "class New {}\n")
+        write(root, "Assets/A.cs", "class A { int x; }\n")
+
+    def test_change_slice_passes_when_its_test_fails_on_the_code_before_it(self):
+        with slice_repo() as (root, run):
+            self.change_slice(root)
+            before = []
+            unity = fake_unity(then=(FAILED, 2), seen=lambda at: before.append(
+                (read(at, "Assets/A.cs"), os.path.exists(os.path.join(at, NEW_CODE)), os.path.exists(os.path.join(at, NEW_TEST)))))
+            code, text = quiet(sc.check, root, is_test, unity)
+            self.assertEqual(code, 0, text)
+            self.assertIn("빨강에서 초록", text)
+            self.assertEqual(before[0], ("class A { int x; }\n", True, True), "첫 실행은 구현이 있는 지금 트리다")
+            self.assertEqual(before[1], ("class A {}\n", False, True), "둘째 실행은 구현 전 코드에 테스트만 얹은 것이다")
+            self.assertEqual((read(root, "Assets/A.cs"), read(root, NEW_CODE)), ("class A { int x; }\n", "class New {}\n"), "끝나면 구현이 돌아와 있다")
+            run("add", "-A")
+            run("commit", "-qm", "slice")
+            self.assertEqual(quiet(sc.has, root, "HEAD")[0], 0)
+
+    def test_test_that_also_passes_without_the_change_proves_nothing(self):
+        with slice_repo() as (root, _):
+            self.change_slice(root)
+            code, text = quiet(sc.check, root, is_test, fake_unity())
+            self.assertEqual(code, 1)
+            self.assertIn("구현 전 코드에서도 통과", text)
+            self.assertEqual(read(root, NEW_CODE), "class New {}\n")
+
+    def test_code_that_does_not_compile_without_the_change_counts_as_red(self):
+        with slice_repo() as (root, _):
+            self.change_slice(root)
+            unity = fake_unity(then=(None, 1), log="")
+            calls = []
+
+            def runner(cmd):  # 둘째 실행(구현 전)은 컴파일 오류를 로그에 남긴다
+                calls.append(cmd)
+                done = unity(cmd)
+                if len(calls) == 2:
+                    with open(cmd[cmd.index("-logFile") + 1], "w", encoding="utf-8") as file:
+                        file.write("Assets/Tests/EditMode/FooTests.cs(3,1): error CS0246: New\n")
+                return done
+            code, text = quiet(sc.check, root, is_test, runner)
+            self.assertEqual(code, 0, text)
+            self.assertIn("컴파일되지 않고", text)
+
+    def test_change_slice_without_a_test_fails_before_unity_starts(self):
+        with slice_repo() as (root, _):
+            plan_slice(root, kind="change", guards=[], retire={})
+            write(root, "Assets/A.cs", "class A { int x; }\n")
+            calls = []
+            self.assertEqual(quiet(sc.check, root, is_test, fake_unity(calls=calls))[0], 1)
+            self.assertEqual(calls, [])
+
+    def test_existing_test_outside_the_retire_list_cannot_be_touched(self):
+        with slice_repo() as (root, _):
+            plan_slice(root, kind="keep", guards=[], retire={})
+            write(root, OLD_TEST, TEST_SOURCE.replace("FooTests", "OldTests").replace("Works", "WorksNow"))
+            calls = []
+            code, text = quiet(sc.check, root, is_test, fake_unity(calls=calls))
+            self.assertEqual((code, calls), (1, []))
+            self.assertIn(OLD_TEST, text)
+            self.assertIn("판정을 요청", text)
+
+    def test_retired_test_may_be_deleted_and_is_named_in_the_record(self):
+        with slice_repo() as (root, run):
+            plan_slice(root, kind="keep", guards=[], retire={OLD_TEST: "없앤 Helper 클래스를 검사한다"})
+            os.remove(os.path.join(root, OLD_TEST))
+            write(root, "Assets/A.cs", "class A { int x; }\n")
+            code, text = quiet(sc.check, root, is_test, fake_unity())
+            self.assertEqual(code, 0, text)
+            self.assertIn("물러난 테스트: " + OLD_TEST, text)
+
+    def test_guard_tests_run_untouched_and_cannot_be_changed(self):
+        with slice_repo() as (root, _):
+            plan_slice(root, kind="keep", guards=[OLD_TEST], retire={})
+            write(root, "Assets/A.cs", "class A { int x; }\n")
+            calls = []
+            self.assertEqual(quiet(sc.check, root, is_test, fake_unity(calls=calls))[0], 0)
+            self.assertIn("FaultTrain.Tests.OldTests", calls[0][calls[0].index("-testFilter") + 1])
+            write(root, OLD_TEST, TEST_SOURCE)
+            code, text = quiet(sc.check, root, is_test, fake_unity(calls=calls))
+            self.assertEqual((code, len(calls)), (1, 1))
+            self.assertIn("지킴이", text)
+
+    def test_after_the_budget_of_failures_it_stops_until_told_to_go_again(self):
+        with slice_repo() as (root, _):
+            write(root, NEW_TEST, TEST_SOURCE)
+            calls = []
+            for _ in range(sc.BUDGET):
+                self.assertEqual(quiet(sc.check, root, is_test, fake_unity(FAILED, 2, calls=calls))[0], 1)
+            code, text = quiet(sc.check, root, is_test, fake_unity(calls=calls))
+            self.assertEqual((code, len(calls)), (1, sc.BUDGET), "예산을 다 쓰면 Unity를 띄우지 않는다")
+            self.assertIn("멈춘다", text)
+            self.assertEqual(quiet(sc.check, root, is_test, fake_unity(calls=calls), again=True)[0], 0)
+            write(root, NEW_TEST, TEST_SOURCE + "// more\n")
+            self.assertEqual(quiet(sc.check, root, is_test, fake_unity(FAILED, 2, calls=calls))[0], 1, "통과하면 예산이 다시 찬다")
+            self.assertEqual(len(calls), sc.BUDGET + 2)
+
+    def test_check_cut_off_in_the_before_state_is_undone_by_the_next_run(self):
+        with slice_repo() as (root, run):
+            self.change_slice(root)
+            tree = sc.work_tree(root)
+            marker = os.path.join(root, ".git", "agent-loop", "restore-tree")
+            with open(marker, "w", encoding="utf-8") as file:  # 폴더는 plan_slice가 만든 상태 파일 옆이다
+                file.write(tree)
+            os.remove(os.path.join(root, NEW_CODE))  # 구현 전 상태에서 끊긴 것처럼
+            write(root, "Assets/A.cs", "class A {}\n")
+            write(root, "Assets/Stray.cs.meta", "made by unity\n")
+            self.assertEqual(quiet(sc.check, root, is_test, fake_unity(then=(FAILED, 2)))[0], 0)
+            self.assertEqual((read(root, "Assets/A.cs"), read(root, NEW_CODE)), ("class A { int x; }\n", "class New {}\n"))
+            self.assertFalse(os.path.exists(os.path.join(root, "Assets/Stray.cs.meta")))
 
 
 class GuardTests(unittest.TestCase):

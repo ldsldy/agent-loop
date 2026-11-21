@@ -74,32 +74,36 @@ def _compile_errors(log):
         return list(dict.fromkeys(line.strip() for line in file if COMPILE_ERROR.search(line)))
 
 
+PASS, FAIL, COMPILE, UNKNOWN = "pass", "fail", "compile", "unknown"
+
+
 def judge(mode, code, results, log):
-    """실행 한 번의 판정 → (통과 여부, 보고 줄들). results·log는 그 실행이 남긴 파일 경로다."""
+    """실행 한 번의 판정 → (상태, 보고 줄들). results·log는 그 실행이 남긴 파일 경로다.
+    상태: PASS, FAIL(테스트가 실패), COMPILE(컴파일 오류), UNKNOWN(테스트를 돌리지 못했거나 필터에 맞는 것이 없음)."""
     label = mode or "컴파일"
     errors = _compile_errors(log)
     if errors:
-        return False, [f"{label}: 컴파일 오류 {len(errors)}건"] + errors[:MAX_LINES]
+        return COMPILE, [f"{label}: 컴파일 오류 {len(errors)}건"] + errors[:MAX_LINES]
     if mode is None:
-        return code == 0, [f"컴파일 {'통과' if code == 0 else f'실패(Unity 종료 코드 {code})'}"]
+        return (PASS, ["컴파일 통과"]) if code == 0 else (UNKNOWN, [f"컴파일 실패(Unity 종료 코드 {code})"])
     if not os.path.exists(results):
-        return False, [f"{label}: 결과 파일이 없다(Unity 종료 코드 {code}). 로그를 본다"]
+        return UNKNOWN, [f"{label}: 결과 파일이 없다(Unity 종료 코드 {code}). 로그를 본다"]
     root = ET.parse(results).getroot()
     total, failed = int(root.get("total", 0)), int(root.get("failed", 0))
     if total == 0:
-        return False, [f"{label}: 필터에 맞는 테스트가 0개다"]
+        return UNKNOWN, [f"{label}: 필터에 맞는 테스트가 0개다"]
     if code == 0 and failed == 0:
-        return True, [f"{label} 통과 {root.get('passed')}/{total}"]
+        return PASS, [f"{label} 통과 {root.get('passed')}/{total}"]
     lines = [f"{label} 실패 {failed}/{total}(Unity 종료 코드 {code})"]
     for case in root.iter("test-case"):
         if case.get("result") == "Failed":
             message = (case.findtext("failure/message") or "").strip().splitlines()
             lines.append(f"- {case.get('fullname')}: {message[0][:300] if message else ''}")
-    return False, lines[:MAX_LINES + 1]
+    return FAIL, lines[:MAX_LINES + 1]
 
 
 def run(root, out, chosen, runner=subprocess.run):
-    """chosen({플랫폼: fixture들})을 차례로 돌린다. 비어 있으면 컴파일만 확인한다. 첫 실패에서 멈춘다 → (통과 여부, 보고 줄들).
+    """chosen({플랫폼: fixture들})을 차례로 돌린다. 비어 있으면 컴파일만 확인한다. 첫 실패에서 멈춘다 → (상태, 보고 줄들).
     같은 프로젝트를 두 Unity가 함께 열 수 없어 한 번에 하나만 돈다."""
     unity = editor(root)
     lines = []
@@ -108,8 +112,8 @@ def run(root, out, chosen, runner=subprocess.run):
         for stale in (results, log):  # 이번 실행이 못 만들면 옛 결과가 통과처럼 보이는 것을 막는다
             if os.path.exists(stale):
                 os.remove(stale)
-        ok, report = judge(mode, runner(command(unity, root, out, mode, names)).returncode, results, log)
+        status, report = judge(mode, runner(command(unity, root, out, mode, names)).returncode, results, log)
         lines += report
-        if not ok:
-            return False, lines
-    return True, lines
+        if status != PASS:
+            return status, lines
+    return PASS, lines
