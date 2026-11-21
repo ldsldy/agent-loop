@@ -1,7 +1,7 @@
 # agent-loop 설계
 
 Unity 저장소의 개발 루프(마일스톤 → 루프 브랜치 → 조각 PR → 조각 검사 → 최소 리뷰 → 머지 → 상세 리뷰)를 돌리는 Claude Code 플러그인.
-Unity 전용이다(2026-11-21 사용자 결정). 절차는 `skills/loop`, 리뷰는 `skills/loop-review`, 설치는 `skills/loop-init`, 이미 있는 코드의 정리 계획은 `skills/loop-refactor`가 정본이다.
+Unity 전용이다(2026-11-21 사용자 결정). 절차는 `skills/loop`, 리뷰는 `skills/loop-review`, 설치는 `skills/loop-init`, 이미 있는 코드의 정리 계획은 `skills/loop-refactor`, 테스트 점검은 `skills/loop-test-audit`가 정본이다.
 
 ## 원칙
 
@@ -17,7 +17,7 @@ Unity 전용이다(2026-11-21 사용자 결정). 절차는 `skills/loop`, 리뷰
 | 플러그인 | 저장소 (`.agent-loop/`) |
 |---|---|
 | 상태와 다음 행동 규칙 (`orchestrator.py`, `unit.py`) | `config.json`: 기준 브랜치, 리뷰 대상 경로, 테스트 경로, diff 통계 처리 경로, 규칙 문서 목록, CI 아티팩트 이름, 증거 명령, 실행기 |
-| 조각 검사·모양 검사 (`slice_check.py`, `unity_tests.py`, `shape.py`) | `models.json`: 역할별 모델·노력 |
+| 조각 검사·모양 검사·테스트 점검 (`slice_check.py`, `unity_tests.py`, `shape.py`, `audit_tests.py`) | `models.json`: 역할별 모델·노력 |
 | 조각 PR 잇기 (`pr_chain.sh`) | `rubric.json`: 상세 리뷰 항목·배점, 게이트, 통과 점수, 개선 한도 |
 | 리뷰 실행기·채점 공식·판정 (`review.py`, `quality_gate.py`) | `CLAUDE.md`의 프로젝트 규칙 |
 | 변경 범위 판정 (`scope.py`), 자동 머지 가드 원본·템플릿 | `.github/` 아래 복사본(`loop-init`이 넣음) |
