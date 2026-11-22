@@ -14,7 +14,7 @@ DIFFERENT = {
     "scripts/slice_check.py", "scripts/shape.py", "scripts/audit_tests.py", "scripts/review.py",
     "skills/loop/SKILL.md", "skills/loop-init/SKILL.md", "skills/loop-refactor/SKILL.md",
     "skills/loop-review/SKILL.md", "skills/loop-test-audit/SKILL.md",
-    "templates/agent-loop/config.json",
+    "templates/agent-loop/config.json", "templates/agent-loop/rubric.json", "references/scoring.md",
     "tests/test_slice_check.py", "tests/test_shape.py", "tests/test_audit_tests.py", "tests/test_review.py",
 }
 

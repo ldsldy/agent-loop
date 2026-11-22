@@ -329,9 +329,7 @@ def prompt(level, sha, evidence, material, machine=None, incremental=False):
                 f"사람에게 묻지 않는다(비대화형). 이 조각을 리뷰하는 이유: {'; '.join(machine['review'])}.\n\n"
                 f"{qg.minimal_text(machine['criteria'])}\n확인하지 못한 기준은 unknown으로 둔다.")
     else:
-        editor = CONFIG.get("editor_globs")
         task = (f"{qg.rubric_text()}\n\n큰 단위(루프 브랜치) 전체의 상세 리뷰다. 평가표의 모든 그룹과 필수 게이트를 채점한다. " + SUBTRACT
-                + (f"에디터 코드({', '.join(editor)})는 수용 기준대로 됐는지만 보고, 구조·런타임 항목의 근거로 쓰지 않는다. " if editor else "")
                 + (INCREMENTAL if incremental else "") + "테스트 근거는 아래 CI 결과다. 동작이 요구대로인지는 리뷰 자료의 spec 이슈 본문으로 판단한다. 채점 규칙은 리뷰 자료의 \"채점 규칙\" 문서다. "
                 "확인하지 못한 항목은 quant·qual을 null로 둔다.")
     return compose(sha, task, evidence, material)
