@@ -20,6 +20,6 @@ jobs:
       - run: git config --global user.email ci@example.com && git config --global user.name ci
       - run: |
           set -e
-          for test in tests/test_*.py; do
+          for test in tests/test_*.py unity/tests/test_*.py wpf/tests/test_*.py; do
             echo "::group::$test"; python -I "$test"; echo "::endgroup::"
           done

@@ -1,0 +1,31 @@
+name: 자동 머지 가드
+
+# pull_request_target은 기준 브랜치(loop/**)의 이 파일과 정책을 쓴다. PR 코드는 체크아웃하지 않는다(실행하지 않는다).
+# low-risk 라벨이 없는 PR은 통과만 한다. 라벨이 있으면 정책을 검사해 위반이면 실패하고 PR에 이유를 남긴다.
+on:
+  pull_request_target:
+    branches: ['loop/**']
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  auto-merge-guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: 정책 검사와 자동 머지 켜기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: python .github/scripts/auto_merge_guard.py

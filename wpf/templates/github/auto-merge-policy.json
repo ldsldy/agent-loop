@@ -1,0 +1,13 @@
+{
+  "label": "low-risk",
+  "required_checks": ["auto-merge-guard"],
+  "deny": [
+    "CLAUDE.md", ".claude/**", ".github/**", ".agent-loop/**", "**/*.json"
+  ],
+  "allow": [
+    {"glob": "**/*.md", "status": ["added", "modified"]},
+    {"glob": "docs/**", "status": ["added", "modified"]}
+  ],
+  "test_glob": "**/tests/**",
+  "test_disable_markers": ["[Ignore", "@Ignore", "@Disabled", ".skip(", "pytest.mark.skip"]
+}

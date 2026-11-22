@@ -1,7 +1,23 @@
 # agent-loop 설계
 
-Unity 저장소의 개발 루프(마일스톤 → 루프 브랜치 → 조각 PR → 조각 검사 → 최소 리뷰 → 머지 → 상세 리뷰)를 돌리는 Claude Code 플러그인.
-Unity 전용이다(2026-11-21 사용자 결정). 절차는 `skills/loop`, 리뷰는 `skills/loop-review`, 설치는 `skills/loop-init`, 이미 있는 코드의 정리 계획은 `skills/loop-refactor`, 테스트 점검은 `skills/loop-test-audit`가 정본이다.
+개발 루프(마일스톤 → 루프 브랜치 → 조각 PR → 조각 검사 → 최소 리뷰 → 머지 → 상세 리뷰)를 돌리는 Claude Code 플러그인 둘이 이 저장소에 있다.
+`unity/`는 Unity 저장소용 `agent-loop-unity`, `wpf/`는 C# WPF(.NET) 저장소용 `agent-loop-wpf`다(2026-11-22 사용자 결정. 스택마다 플러그인을 따로 둔다).
+저장소 하나에는 둘 중 하나만 켠다. 아래 경로는 각 플러그인 폴더 안의 것이다.
+절차는 `skills/loop`, 리뷰는 `skills/loop-review`, 설치는 `skills/loop-init`, 이미 있는 코드의 정리 계획은 `skills/loop-refactor`, 테스트 점검은 `skills/loop-test-audit`가 정본이다.
+
+## 두 플러그인이 함께 쓰는 파일
+
+플러그인은 설치될 때 자기 폴더만 복사되므로 폴더 밖의 파일을 못 쓴다. 그래서 공통 파일을 `unity/`와 `wpf/`에 똑같이 복사해 둔다.
+`tests/test_common.py`가 둘이 같은지 검사한다. 공통 파일은 양쪽을 함께 고치고, 일부러 다르게 두는 파일은 그 테스트의 `DIFFERENT`에 적는다.
+다른 곳은 테스트를 돌리는 방법(`unity_tests.py` / `dotnet_tests.py`)과 그것에 닿는 조각 검사·모양 검사·테스트 점검·리뷰 실행기, 스킬 본문, 설정 씨앗이다.
+
+| | Unity | WPF |
+|---|---|---|
+| 컴파일·테스트 | Unity batchmode, EditMode·PlayMode | 저장소 루트의 `dotnet build`, 테스트 프로젝트별 `dotnet test` |
+| 조각 검사만의 것 | `.meta` GUID 보존, CI 중 Unity 실행 가드 | 없음 |
+| 모양 규칙만의 것 | Unity 메시지 상속, 직렬화 필드 | `bin`·`obj`를 읽지 않음 |
+| 테스트 점검이 "쓰인다"고 보는 것 | Unity가 찾아 쓰는 베이스·속성 | XAML에 이름이 나오는 타입 |
+| CI 결과 | NUnit3 XML | TRX |
 
 ## 원칙
 
@@ -17,11 +33,11 @@ Unity 전용이다(2026-11-21 사용자 결정). 절차는 `skills/loop`, 리뷰
 | 플러그인 | 저장소 (`.agent-loop/`) |
 |---|---|
 | 상태와 다음 행동 규칙 (`orchestrator.py`, `unit.py`) | `config.json`: 기준 브랜치, 리뷰 대상 경로, 테스트 경로, diff 통계 처리 경로, 규칙 문서 목록, CI 아티팩트 이름, 증거 명령, 실행기 |
-| 조각 검사·모양 검사·테스트 점검 (`slice_check.py`, `unity_tests.py`, `shape.py`, `audit_tests.py`) | `models.json`: 역할별 모델·노력 |
+| 조각 검사·모양 검사·테스트 점검 (`slice_check.py`, `unity_tests.py` 또는 `dotnet_tests.py`, `shape.py`, `audit_tests.py`) | `models.json`: 역할별 모델·노력 |
 | 조각 PR 잇기 (`pr_chain.sh`) | `rubric.json`: 상세 리뷰 항목·배점, 게이트, 통과 점수, 개선 한도 |
 | 리뷰 실행기·채점 공식·판정 (`review.py`, `quality_gate.py`) | `CLAUDE.md`의 프로젝트 규칙 |
 | 변경 범위 판정 (`scope.py`), 자동 머지 가드 원본·템플릿 | `.github/` 아래 복사본(`loop-init`이 넣음) |
-| 훅: `AGENT_LOOP_HOME` 내보내기, push·Unity 실행 가드, PR 뒤 실행기 확인 | |
+| 훅: `AGENT_LOOP_HOME` 내보내기, push 가드(Unity는 CI 중 Unity 실행 가드도), PR 뒤 실행기 확인 | |
 
 ## 계약
 
@@ -30,14 +46,14 @@ Unity 전용이다(2026-11-21 사용자 결정). 절차는 `skills/loop`, 리뷰
   바꾸는 조각은 구현 전 코드에 테스트만 얹으면 실패해야 한다. 계획에 없는 테스트가 막으면 코드를 굽히지 않고 멈춰서 판정을 받는다. 같은 조각의 실패가 3번이면 멈춘다.
 - **상태 파일**: `<git 공용 폴더>/agent-loop/loop/<루프>.json`. 조정 세션과 구현 세션이 다른 worktree에 있어도 같은 계약을 읽는다.
 - **조각 검사 기록**: `<git 공용 폴더>/agent-loop/slice-check/<트리 해시>.json`. 트리 해시는 커밋하지 않은 변경과 추적 안 된 파일까지 담은 작업 트리의 것이다.
-  PR 커밋의 트리와 같아야 머지된다. Unity가 실행 중 고친 추적 파일은 되돌리고, 새로 생긴 파일은 실패다.
+  PR 커밋의 트리와 같아야 머지된다. Unity나 빌드가 실행 중 고친 추적 파일은 되돌리고, 새로 생긴 파일은 실패다.
 - **모양 규칙**: `shape.py`가 조각이 새로 만든 파일·타입에 파일·타입·상속·폴더 규칙을 건다. 예외는 조각의 `allow`에 이유와 함께 적는다. 옛 코드는 정리 루프가 맞춘다.
 - **최소 리뷰**: 머지 문은 기계가 지킨다. 리뷰어는 다른 조각이 의존하는 조각, `complex` 조각, 선언 밖을 건드린 조각에만 부르고 그 조각의 수용 기준을 하나씩 대조한다.
   ShalomEng의 최소 리뷰 71회 가운데 리뷰어만 잡을 수 있던 것은 2회였고, 둘 다 수용 기준의 세부가 어긋난 것이었다.
 - **상세 리뷰**: 조각별 수용 기준 대조와 과잉 설계 없음이 게이트다. 감점은 없다.
 - **증거 명령**: `{"title": "...", "cmd": [...]}`. 저장소 루트에서 돌고, 인자의 `{base}`·`{sha}`·`{tree}`(대상 커밋을 그대로 푼 폴더)를 바꿔 받는다.
   출력이 JSON 객체면 그 `hard_fails`가 최소 리뷰를 실패시킨다. 0이 아닌 종료는 리뷰를 멈춘다.
-- **CI 결과**: `config.ci.results_artifact`의 NUnit3 XML을 요약한다.
+- **CI 결과**: `config.ci.results_artifact`의 결과 파일(Unity는 NUnit3 XML, WPF는 TRX)을 요약한다.
 - **리뷰 대상 경로**: 값은 `config.review_paths` 한 곳, 판정 코드는 `templates/github/scripts/review_scope.py` 한 곳.
   플러그인 `scope.py`가 그 템플릿을 가져다 쓰고, 저장소 CI는 `loop-init`이 복사한 같은 파일을 돌린다.
 - **플러그인 관리 파일과 저장소 소유 파일**: `init.py`는 가드 워크플로·스크립트·`review_scope.py`를 플러그인 것으로 맞추고(`--update`),
@@ -50,5 +66,8 @@ Unity 전용이다(2026-11-21 사용자 결정). 절차는 `skills/loop`, 리뷰
 - 빨강 단계에서 컴파일 불가를 인정하므로, 테스트가 새 코드에 의존한다는 것만 증명하고 단언이 옳다는 것은 증명하지 못할 수 있다.
 - 조각 검사 기록은 에이전트가 직접 만들 수 있다. 막으려는 것은 잊어버리는 것이지 속이는 것이 아니다. 전체 테스트는 루프 끝 CI가 본다.
 - Unity 실행 파일은 Unity Hub 기본 설치 경로(Windows)에서만 찾는다.
+- WPF: `dotnet test`는 VSTest 방식(`--filter`, trx 로거)만 안다. 저장소 루트에 솔루션이 하나라고 본다. xUnit 프로젝트 하나로만 실제 실행을 확인했다(2026-11-22).
+- WPF: 모양 검사는 `.cs`만 읽어 XAML에서만 쓰는 곳을 세지 못한다. 바인딩 경로와 리소스 키가 끊기는 것은 빌드도 검사도 못 잡는다.
+- 두 플러그인을 한 세션에 함께 켜면 `AGENT_LOOP_HOME`은 나중에 내보낸 쪽이 이긴다. 저장소마다 하나만 켠다.
 - 로컬 경로 마켓플레이스는 이 PC에서만 동작한다.
 - `AGENT_LOOP_HOME`은 `claude -p --plugin-dir` 세션의 Bash에서 보이는 것만 확인했다(2026-11-20). push 가드 훅도 같은 방식으로 확인했다(2026-11-21). Desktop 앱 세션에서는 확인하지 않았다.

@@ -2,6 +2,7 @@
   "name": "agent-loop",
   "owner": {"name": "LDY"},
   "plugins": [
-    {"name": "agent-loop", "source": "./", "description": "마일스톤 루프: 조각 PR 최소 리뷰·머지, 상세 리뷰"}
+    {"name": "agent-loop-unity", "source": "./unity", "description": "Unity용 마일스톤 루프: 조각 PR 최소 리뷰·머지, 상세 리뷰"},
+    {"name": "agent-loop-wpf", "source": "./wpf", "description": "C# WPF(.NET)용 마일스톤 루프: 조각 PR 최소 리뷰·머지, 상세 리뷰"}
   ]
 }

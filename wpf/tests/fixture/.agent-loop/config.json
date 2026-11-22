@@ -1,0 +1,18 @@
+{
+  "base_branch": "develop",
+  "review_paths": ["Assets/", "Packages/", "ProjectSettings/", ".github/workflows/editmode-tests.yml"],
+  "test_globs": ["*/Tests/*"],
+  "stats_only_globs": ["*.asset", "*.unity", "*.prefab", "*.meta", "*.csv", "*.json", "*.html", "*.png", "*.py", "*.md"],
+  "full_diff_dirs": ["Packages", "ProjectSettings"],
+  "context_files": ["CLAUDE.md", "docs/agents/review-evidence.md"],
+  "ci": {
+    "results_artifact": "unity-test-results",
+    "result_files": ["editmode-results.xml", "playmode-results.xml"]
+  },
+  "evidence": [
+    {"title": "python -I tools/review/packages.py (바뀐 git 패키지의 보안 점검 절과 diff)", "cmd": ["python", "-I", "tools/review/packages.py", "{base}", "{sha}"]},
+    {"title": "python -I tools/review/design_qa.py (hard_fails는 치명적 결함)", "cmd": ["python", "-I", "tools/review/design_qa.py", "{tree}"]}
+  ],
+  "loop_branch_ruleset": {"name": "loop-branches", "id": 27170373},
+  "runner": {"task": "GitHubActionsRunner-Unity"}
+}

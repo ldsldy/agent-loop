@@ -1,0 +1,14 @@
+{
+  "base_branch": "develop",
+  "review_paths": ["src/"],
+  "test_globs": ["tests/*", "*.Tests/*"],
+  "stats_only_globs": ["*.json", "*.lock", "*.csv", "*.png", "*.svg", "*.md"],
+  "full_diff_dirs": [],
+  "context_files": ["CLAUDE.md"],
+  "ci": {
+    "results_artifact": "test-results",
+    "result_files": ["test-results.trx"]
+  },
+  "evidence": [],
+  "shape": {"roots": ["src"], "max_depth": 3, "folder_names": []}
+}
